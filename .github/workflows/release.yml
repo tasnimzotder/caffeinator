@@ -29,7 +29,7 @@ jobs:
             -configuration Release \
             -derivedDataPath build/DerivedData \
             clean build \
-            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
@@ -54,12 +54,14 @@ jobs:
 
           INSTALLATION
           1. Drag Caffeinator.app to the Applications folder
-          2. Launch Caffeinator from Applications
-          3. Look for the coffee cup icon in your menu bar
+          2. Open Terminal and run:
+             xattr -cr /Applications/Caffeinator.app
+          3. Launch Caffeinator from Applications
+          4. Look for the coffee cup icon in your menu bar
 
-          FIRST LAUNCH
-          macOS may ask you to confirm opening the app.
-          Go to System Settings > Privacy & Security to allow it.
+          WHY STEP 2?
+          This app is not notarized with Apple. The xattr command
+          removes the quarantine flag that macOS adds to downloads.
 
           FEATURES
           - Quick duration presets (30m, 1h, 2h, 4h, indefinite)
