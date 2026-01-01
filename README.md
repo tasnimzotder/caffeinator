@@ -1,8 +1,10 @@
 # Caffeinator
 
-A modern, developer-friendly macOS menu bar app for keeping your Mac awake.
+[![Version](https://img.shields.io/badge/version-0.0.1--alpha-blue)](https://github.com/tasnimzotder/caffeinator/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)](https://github.com/tasnimzotder/caffeinator)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Version:** 0.0.1-alpha (Not yet released)
+A modern, developer-friendly macOS menu bar app for keeping your Mac awake.
 
 ## Features
 
