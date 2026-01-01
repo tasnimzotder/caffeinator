@@ -1,6 +1,7 @@
 # Caffeinator
 
-[![Version](https://img.shields.io/badge/version-0.0.1--alpha-blue)](https://github.com/tasnimzotder/caffeinator/releases)
+[![Release](https://img.shields.io/github/v/release/tasnimzotder/caffeinator?label=release)](https://github.com/tasnimzotder/caffeinator/releases/latest)
+[![Pre-release](https://img.shields.io/github/v/release/tasnimzotder/caffeinator?include_prereleases&label=pre-release)](https://github.com/tasnimzotder/caffeinator/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)](https://github.com/tasnimzotder/caffeinator)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -23,6 +24,18 @@ A modern, developer-friendly macOS menu bar app for keeping your Mac awake.
 
 - macOS 14.0 (Sonoma) or later
 - Apple Silicon or Intel Mac
+
+## Installation
+
+1. Download the latest `.dmg` from [Releases](https://github.com/tasnimzotder/caffeinator/releases)
+2. Open the DMG and drag `Caffeinator.app` to Applications
+3. Open Terminal and run:
+   ```bash
+   xattr -cr /Applications/Caffeinator.app
+   ```
+4. Launch Caffeinator from Applications
+
+> **Why step 3?** This app is not notarized with Apple. The `xattr` command removes the quarantine flag that macOS adds to downloaded apps.
 
 ## Building from Source
 
