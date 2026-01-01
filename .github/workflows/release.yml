@@ -1,0 +1,88 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "VERSION=${REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build Release
+        run: |
+          xcodebuild -project Caffeinator.xcodeproj \
+            -scheme Caffeinator \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            clean build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Create DMG
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          APP_NAME="Caffeinator"
+          DMG_NAME="${APP_NAME}-${VERSION}"
+
+          # Setup directories
+          mkdir -p build/dmg build/release
+
+          # Copy app and create Applications symlink
+          cp -R "build/DerivedData/Build/Products/Release/${APP_NAME}.app" build/dmg/
+          ln -s /Applications build/dmg/Applications
+
+          # Create README
+          cat > build/dmg/README.txt << 'EOF'
+          CAFFEINATOR
+          Keep Your Mac Awake
+
+          INSTALLATION
+          1. Drag Caffeinator.app to the Applications folder
+          2. Launch Caffeinator from Applications
+          3. Look for the coffee cup icon in your menu bar
+
+          FIRST LAUNCH
+          macOS may ask you to confirm opening the app.
+          Go to System Settings > Privacy & Security to allow it.
+
+          FEATURES
+          - Quick duration presets (30m, 1h, 2h, 4h, indefinite)
+          - Developer presets (Docker, Xcode, npm, etc.)
+          - Process watching (keep awake while app is running)
+          - Global keyboard shortcut
+          - Menu bar timer display
+          - Launch at login option
+          EOF
+
+          # Create DMG
+          hdiutil create -srcfolder build/dmg \
+            -volname "${APP_NAME}" \
+            -fs HFS+ \
+            -format UDZO \
+            -imagekey zlib-level=9 \
+            "build/release/${DMG_NAME}.dmg"
+
+          # Generate checksum
+          cd build/release
+          shasum -a 256 "${DMG_NAME}.dmg" > "${DMG_NAME}.dmg.sha256"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/release/*.dmg
+            build/release/*.sha256
+          generate_release_notes: true
