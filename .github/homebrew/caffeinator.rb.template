@@ -1,8 +1,8 @@
 cask "caffeinator" do
-  version "0.0.1-alpha4"
-  sha256 :no_check # Update with actual SHA256 after release
+  version "{{VERSION_NUM}}"
+  sha256 "{{SHA256}}"
 
-  url "https://github.com/tasnimzotder/caffeinator/releases/download/v#{version}/Caffeinator_v#{version}_aarch64.dmg"
+  url "https://github.com/tasnimzotder/caffeinator/releases/download/{{VERSION}}/Caffeinator_{{VERSION}}_aarch64.dmg"
   name "Caffeinator"
   desc "Minimal macOS menu bar app to keep your Mac awake"
   homepage "https://github.com/tasnimzotder/caffeinator"
@@ -13,6 +13,12 @@ cask "caffeinator" do
   end
 
   app "Caffeinator.app"
+
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-cr", "#{appdir}/Caffeinator.app"],
+                   sudo: false
+  end
 
   zap trash: [
     "~/Library/LaunchAgents/com.tasnimzotder.caffeinator.plist",

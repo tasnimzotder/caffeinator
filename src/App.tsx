@@ -7,15 +7,18 @@ import { ModeSelect } from "./components/ModeSelect";
 import { DurationPicker } from "./components/DurationPicker";
 import { Github, LogOut } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import type { AssertionType } from "./types";
 
 function App() {
   const { status, loading, error, activate, deactivate } = useCaffeinate();
   const [selectedMode, setSelectedMode] = useState<AssertionType>("NoIdleSleep");
   const [autostart, setAutostart] = useState(false);
+  const [version, setVersion] = useState("");
 
   useEffect(() => {
     invoke<boolean>("get_autostart_enabled").then(setAutostart).catch(() => {});
+    getVersion().then(setVersion).catch(() => {});
   }, []);
 
   const toggleAutostart = async () => {
@@ -81,6 +84,9 @@ function App() {
             <span>Launch at Login</span>
           </button>
           <div className="flex items-center gap-3">
+            {version && (
+              <span className="text-[10px] text-neutral-600">v{version}</span>
+            )}
             <a
               href="https://github.com/tasnimzotder/caffeinator"
               target="_blank"
