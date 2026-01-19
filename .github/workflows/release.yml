@@ -107,6 +107,12 @@ jobs:
 
             app "Caffeinator.app"
 
+            postflight do
+              system_command "/usr/bin/xattr",
+                             args: ["-cr", "#{appdir}/Caffeinator.app"],
+                             sudo: false
+            end
+
             zap trash: [
               "~/Library/LaunchAgents/com.tasnimzotder.caffeinator.plist",
               "~/Library/Preferences/com.tasnimzotder.caffeinator.plist",
