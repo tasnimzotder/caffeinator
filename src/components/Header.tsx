@@ -1,5 +1,6 @@
 import type { CaffeinateStatus } from "../types";
 import { PowerProfileButton } from "./PowerProfileButton";
+import { CoffeeIcon } from "./CoffeeIcon";
 
 interface HeaderProps {
   status: CaffeinateStatus;
@@ -21,10 +22,10 @@ export function Header({ status, onStop }: HeaderProps) {
     <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 dark:border-white/5">
       <div className="flex items-center gap-3">
         <div
-          className={`text-2xl ${status.is_active ? "animate-bounce" : ""}`}
+          className={`${status.is_active ? "animate-bounce" : ""}`}
           style={{ animationDuration: "2s" }}
         >
-          ☕
+          <CoffeeIcon size={28} className="text-neutral-700 dark:text-neutral-300" />
         </div>
         <div>
           <h1 className="font-semibold text-neutral-800 dark:text-white">

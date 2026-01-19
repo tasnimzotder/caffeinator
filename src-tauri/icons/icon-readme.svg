@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Rounded app icon background -->
+  <rect width="512" height="512" rx="100" fill="#1a1a1a"/>
+
+  <!-- Single elegant steam wisp -->
+  <path d="M256 24c0 40 32 40 32 80s-32 40-32 80" stroke="#ffffff" stroke-width="20" stroke-linecap="round" fill="none"/>
+
+  <!-- Modern takeaway cup body -->
+  <path d="M96 192h320l-32 280c-2 22-22 32-48 32H176c-26 0-46-10-48-32L96 192z" stroke="#ffffff" stroke-width="20" stroke-linejoin="round" fill="none"/>
+
+  <!-- Cup lid -->
+  <rect x="72" y="160" width="368" height="40" rx="8" stroke="#ffffff" stroke-width="20" fill="none"/>
+
+  <!-- Lid top -->
+  <rect x="104" y="136" width="304" height="32" rx="6" stroke="#ffffff" stroke-width="20" fill="none"/>
+
+  <!-- Cup sleeve band -->
+  <path d="M120 320h272" stroke="#ffffff" stroke-width="20" stroke-linecap="round"/>
+  <path d="M132 372h248" stroke="#ffffff" stroke-width="20" stroke-linecap="round"/>
+</svg>
