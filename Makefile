@@ -1,80 +1,52 @@
 # Caffeinator Makefile
-# Build commands for VS Code workflow
+# Build commands for Tauri app
 
-.PHONY: build run clean release install-cli uninstall-cli open dmg installer
+.PHONY: dev build dmg clean install help
 
 # Default target
 all: build
 
-# Build debug version
+# Run development server
+dev:
+	@echo "Starting Caffeinator dev server..."
+	bun run tauri dev
+
+# Build release version (.app bundle only)
 build:
-	@echo "Building Caffeinator (Debug)..."
-	xcodebuild -project Caffeinator.xcodeproj -scheme Caffeinator -configuration Debug build
-
-# Build release version
-release:
 	@echo "Building Caffeinator (Release)..."
-	xcodebuild -project Caffeinator.xcodeproj -scheme Caffeinator -configuration Release build
+	bun run tauri build --bundles app
 
-# Build CLI only
-build-cli:
-	@echo "Building CaffeinatorCLI..."
-	xcodebuild -project Caffeinator.xcodeproj -scheme CaffeinatorCLI -configuration Release build
-
-# Run the app
-run: build
-	@echo "Running Caffeinator..."
-	open ~/Library/Developer/Xcode/DerivedData/Caffeinator-*/Build/Products/Debug/Caffeinator.app
+# Build DMG (creates .app first, then DMG manually)
+dmg: build
+	@echo "Creating DMG..."
+	cd src-tauri/target/release/bundle && \
+	rm -f Caffeinator_*.dmg && \
+	hdiutil create -volname "Caffeinator" -srcfolder macos/Caffeinator.app -ov -format UDZO Caffeinator_0.1.0_aarch64.dmg
+	@echo "DMG created at src-tauri/target/release/bundle/Caffeinator_0.1.0_aarch64.dmg"
 
 # Clean build artifacts
 clean:
 	@echo "Cleaning..."
-	xcodebuild -project Caffeinator.xcodeproj -scheme Caffeinator clean
-	rm -rf ~/Library/Developer/Xcode/DerivedData/Caffeinator-*
+	rm -rf dist target src-tauri/target
 
-# Open in Xcode
-open:
-	open Caffeinator.xcodeproj
-
-# Install CLI to /usr/local/bin (requires sudo)
-install-cli: build-cli
-	@echo "Installing CLI..."
-	@CLI_PATH=$$(find ~/Library/Developer/Xcode/DerivedData/Caffeinator-*/Build/Products -name "CaffeinatorCLI" -type f 2>/dev/null | head -1); \
-	if [ -n "$$CLI_PATH" ]; then \
-		sudo cp "$$CLI_PATH" /usr/local/bin/caffeinator; \
-		sudo chmod +x /usr/local/bin/caffeinator; \
-		echo "CLI installed to /usr/local/bin/caffeinator"; \
+# Install to /Applications (requires the app to be built first)
+install: build
+	@echo "Installing to /Applications..."
+	@if [ -d "src-tauri/target/release/bundle/macos/Caffeinator.app" ]; then \
+		cp -r src-tauri/target/release/bundle/macos/Caffeinator.app /Applications/; \
+		echo "Installed to /Applications/Caffeinator.app"; \
 	else \
-		echo "Error: CLI binary not found. Build first."; \
+		echo "Error: App bundle not found. Build first with 'make build'"; \
 		exit 1; \
 	fi
-
-# Uninstall CLI
-uninstall-cli:
-	@echo "Uninstalling CLI..."
-	sudo rm -f /usr/local/bin/caffeinator
-	@echo "CLI uninstalled"
-
-# Create DMG installer
-dmg:
-	@echo "Creating DMG installer..."
-	./scripts/create-dmg.sh
-
-# Alias for dmg
-installer: dmg
 
 # Show help
 help:
 	@echo "Caffeinator Build Commands"
 	@echo ""
-	@echo "  make build       - Build debug version"
-	@echo "  make release     - Build release version"
-	@echo "  make build-cli   - Build CLI tool only"
-	@echo "  make run         - Build and run the app"
-	@echo "  make clean       - Clean build artifacts"
-	@echo "  make open        - Open project in Xcode"
-	@echo "  make install-cli - Install CLI to /usr/local/bin"
-	@echo "  make uninstall-cli - Remove CLI from /usr/local/bin"
-	@echo "  make dmg         - Create DMG installer"
-	@echo "  make installer   - Alias for 'make dmg'"
-	@echo "  make help        - Show this help"
+	@echo "  make dev      - Run development server with hot reload"
+	@echo "  make build    - Build release .app bundle"
+	@echo "  make dmg      - Build release and create DMG"
+	@echo "  make clean    - Clean build artifacts"
+	@echo "  make install  - Build and install to /Applications"
+	@echo "  make help     - Show this help"

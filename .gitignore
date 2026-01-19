@@ -1,66 +1,32 @@
-# Xcode
-build/
-DerivedData/
-*.xcuserstate
-*.xccheckout
-*.xcscmblueprint
-xcuserdata/
+# Dependencies
+node_modules/
 
-# Xcode - Avoid personal build settings
-*.pbxuser
-!default.pbxuser
-*.mode1v3
-!default.mode1v3
-*.mode2v3
-!default.mode2v3
-*.perspectivev3
-!default.perspectivev3
+# Build outputs
+dist/
+dist-ssr/
+target/
+src-tauri/target/
 
-# Swift Package Manager
-.build/
-Packages/
-Package.resolved
-*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
-
-# CocoaPods (if used)
-Pods/
-Podfile.lock
-
-# Carthage (if used)
-Carthage/Build/
-Carthage/Checkouts/
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
 
 # macOS
 .DS_Store
 .AppleDouble
 .LSOverride
 ._*
-.Spotlight-V100
-.Trashes
 
-# Thumbnails
-Thumbs.db
-ehthumbs.db
-
-# Archives
-*.zip
-*.tar.gz
-*.dmg
-*.pkg
-*.app
-
-# Build artifacts
-*.o
-*.a
-*.dylib
-*.dSYM/
-
-# IDE
+# Editor
+.vscode/*
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
 *~
-.vscode/
 
 # Environment
 .env
@@ -68,14 +34,21 @@ ehthumbs.db
 *.pem
 *.key
 
-# Logs
-*.log
-logs/
-
-# Test artifacts
-*.xcresult
-
-# Temporary files
+# Temporary
 *.tmp
 *.temp
 .cache/
+*.local
+
+# Build artifacts
+*.app
+*.dmg
+*.pkg
+
+# Claude Code
+CLAUDE.md
+
+# Plan files
+PLAN.md
+PRODUCT.md
+scripts/
