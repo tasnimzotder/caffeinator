@@ -1,6 +1,7 @@
 # Caffeinator
 
 [![Release](https://img.shields.io/github/v/release/tasnimzotder/caffeinator)](https://github.com/tasnimzotder/caffeinator/releases/latest)
+[![Build](https://github.com/tasnimzotder/caffeinator/actions/workflows/release.yml/badge.svg)](https://github.com/tasnimzotder/caffeinator/actions/workflows/release.yml)
 [![Platform](https://img.shields.io/badge/platform-macOS%2011%2B-lightgrey)](https://github.com/tasnimzotder/caffeinator)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
