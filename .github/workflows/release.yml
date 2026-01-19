@@ -29,12 +29,59 @@ jobs:
         run: bun run tauri build --bundles app
 
       - name: Create DMG
+        id: dmg
         run: |
           cd src-tauri/target/release/bundle
-          hdiutil create -volname "Caffeinator" -srcfolder macos/Caffeinator.app -ov -format UDZO Caffeinator_${{ github.ref_name }}_aarch64.dmg
+          DMG_NAME="Caffeinator_${{ github.ref_name }}_aarch64.dmg"
+          hdiutil create -volname "Caffeinator" -srcfolder macos/Caffeinator.app -ov -format UDZO "$DMG_NAME"
+          SHA256=$(shasum -a 256 "$DMG_NAME" | awk '{print $1}')
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+          echo "dmg_name=$DMG_NAME" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: src-tauri/target/release/bundle/*.dmg
           generate_release_notes: true
+
+      - name: Update Homebrew Tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION_NUM="${VERSION#v}"
+          SHA256="${{ steps.dmg.outputs.sha256 }}"
+
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/tasnimzotder/homebrew-tap.git
+          cd homebrew-tap
+
+          mkdir -p Casks
+          cat > Casks/caffeinator.rb << EOF
+          cask "caffeinator" do
+            version "${VERSION_NUM}"
+            sha256 "${SHA256}"
+
+            url "https://github.com/tasnimzotder/caffeinator/releases/download/${VERSION}/Caffeinator_${VERSION}_aarch64.dmg"
+            name "Caffeinator"
+            desc "Minimal macOS menu bar app to keep your Mac awake"
+            homepage "https://github.com/tasnimzotder/caffeinator"
+
+            livecheck do
+              url :url
+              strategy :github_latest
+            end
+
+            app "Caffeinator.app"
+
+            zap trash: [
+              "~/Library/LaunchAgents/com.tasnimzotder.caffeinator.plist",
+              "~/Library/Preferences/com.tasnimzotder.caffeinator.plist",
+            ]
+          end
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/caffeinator.rb
+          git commit -m "Update caffeinator to ${VERSION}" || exit 0
+          git push

@@ -16,6 +16,14 @@ A minimal macOS menu bar app to keep your Mac awake.
 
 ## Installation
 
+### Homebrew
+
+```bash
+brew install --cask tasnimzotder/tap/caffeinator
+```
+
+### Manual
+
 1. Download the `.dmg` from [Releases](https://github.com/tasnimzotder/caffeinator/releases)
 2. Drag `Caffeinator.app` to Applications
 3. Run `xattr -cr /Applications/Caffeinator.app` to remove quarantine
