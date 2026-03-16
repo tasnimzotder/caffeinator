@@ -10,6 +10,7 @@ interface ModeSelectProps {
 const MODES: AssertionType[] = [
   "NoIdleSleep",
   "NoDisplaySleep",
+  "LidClose",
   "NetworkActive",
   "BackgroundTask",
 ];
@@ -20,7 +21,7 @@ export function ModeSelect({ selected, onChange, disabled }: ModeSelectProps) {
       <p className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider mb-2">
         Mode
       </p>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         {MODES.map((type) => {
           const { label, icon: Icon, description } = MODE_INFO[type];
           return (

@@ -19,6 +19,7 @@ const K_IOPM_ASSERTION_LEVEL_ON: u32 = 255;
 pub enum AssertionType {
     NoIdleSleep,
     NoDisplaySleep,
+    LidClose,
     NetworkActive,
     BackgroundTask,
 }
@@ -27,7 +28,7 @@ impl AssertionType {
     fn as_cfstring(&self) -> CFString {
         let s = match self {
             AssertionType::NoIdleSleep => "PreventUserIdleSystemSleep",
-            AssertionType::NoDisplaySleep => "PreventUserIdleDisplaySleep",
+            AssertionType::NoDisplaySleep | AssertionType::LidClose => "PreventUserIdleDisplaySleep",
             AssertionType::NetworkActive => "NetworkClientActive",
             AssertionType::BackgroundTask => "BackgroundTask",
         };
@@ -38,9 +39,14 @@ impl AssertionType {
         match self {
             AssertionType::NoIdleSleep => "Idle",
             AssertionType::NoDisplaySleep => "Display",
+            AssertionType::LidClose => "Lid Close",
             AssertionType::NetworkActive => "Network",
             AssertionType::BackgroundTask => "Background",
         }
+    }
+
+    pub fn needs_lid_close_prevention(&self) -> bool {
+        matches!(self, AssertionType::LidClose)
     }
 }
 
@@ -77,6 +83,38 @@ pub fn release_assertion(assertion_id: u32) -> Result<(), String> {
     } else {
         Err(format!("Failed to release power assertion: error code {}", result))
     }
+}
+
+/// Enable lid-close sleep prevention via `pmset -b disablesleep 1`.
+/// Prompts for admin credentials via macOS authorization dialog.
+pub fn enable_lid_close_prevention() -> Result<(), String> {
+    use std::process::Command;
+    let output = Command::new("osascript")
+        .args([
+            "-e",
+            "do shell script \"pmset -b disablesleep 1; pmset -b sleep 0\" with administrator privileges",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to prompt for admin: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Lid-close prevention failed: {}", stderr.trim()))
+    }
+}
+
+/// Disable lid-close sleep prevention. Best-effort — does not fail the caller.
+pub fn disable_lid_close_prevention() {
+    use std::process::Command;
+    // Try with admin privileges; if user cancels, the setting persists
+    let _ = Command::new("osascript")
+        .args([
+            "-e",
+            "do shell script \"pmset -b disablesleep 0; pmset -b sleep 5\" with administrator privileges",
+        ])
+        .output();
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

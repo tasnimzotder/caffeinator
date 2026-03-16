@@ -1,6 +1,6 @@
-import { Moon, Monitor, Wifi, Cog, type LucideIcon } from "lucide-react";
+import { Moon, Monitor, Laptop, Wifi, Cog, type LucideIcon } from "lucide-react";
 
-export type AssertionType = "NoIdleSleep" | "NoDisplaySleep" | "NetworkActive" | "BackgroundTask";
+export type AssertionType = "NoIdleSleep" | "NoDisplaySleep" | "LidClose" | "NetworkActive" | "BackgroundTask";
 
 export interface CaffeinateStatus {
   is_active: boolean;
@@ -34,7 +34,8 @@ export interface ModeInfo {
 
 export const MODE_INFO: Record<AssertionType, ModeInfo> = {
   NoIdleSleep: { label: "Idle", icon: Moon, description: "Prevents idle system sleep. Display may still dim or turn off.", activeLabel: "Preventing idle sleep" },
-  NoDisplaySleep: { label: "Display", icon: Monitor, description: "Keeps display on and prevents idle sleep. Lid close still sleeps.", activeLabel: "Keeping display on" },
+  NoDisplaySleep: { label: "Display", icon: Monitor, description: "Keeps display on and prevents idle sleep.", activeLabel: "Keeping display on" },
+  LidClose: { label: "Lid Close", icon: Laptop, description: "Prevents sleep even with lid closed. Requires admin password. Use with caution.", activeLabel: "Lid close prevented" },
   NetworkActive: { label: "Network", icon: Wifi, description: "Keeps system awake while serving network clients (file sharing, etc.).", activeLabel: "Serving network clients" },
   BackgroundTask: { label: "Background", icon: Cog, description: "Keeps process running for background work. System may enter low power.", activeLabel: "Running background task" },
 };

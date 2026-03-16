@@ -21,24 +21,6 @@ function App() {
     getVersion().then(setVersion).catch(() => {});
   }, []);
 
-  // Window fade-in on visibility change
-  useEffect(() => {
-    const root = document.getElementById("root");
-    if (!root) return;
-
-    const show = () => {
-      if (document.visibilityState === "visible") {
-        root.classList.add("window-visible");
-      } else {
-        root.classList.remove("window-visible");
-      }
-    };
-
-    root.classList.add("window-visible");
-    document.addEventListener("visibilitychange", show);
-    return () => document.removeEventListener("visibilitychange", show);
-  }, []);
-
   const toggleAutostart = async () => {
     const newValue = !autostart;
     try {
@@ -54,83 +36,81 @@ function App() {
   };
 
   return (
-    <div className="h-screen p-2">
-      <div className="app-container h-full flex flex-col">
-        {/* Drag region — entire top strip */}
-        <div
-          data-tauri-drag-region
-          className="flex items-center justify-center pt-2 pb-1 cursor-grab active:cursor-grabbing"
-        >
-          <div className="w-10 h-1 rounded-full bg-white/20 pointer-events-none" />
+    <div className="h-full flex flex-col">
+      {/* Drag region */}
+      <div
+        data-tauri-drag-region
+        className="flex items-center justify-center pt-2 pb-1 cursor-grab active:cursor-grabbing"
+      >
+        <div className="w-10 h-1 rounded-full bg-white/20 pointer-events-none" />
+      </div>
+
+      <Header status={status} />
+
+      {error && (
+        <div className="px-4 py-2 bg-red-500/20 text-red-400 text-xs">
+          Error: {error}
         </div>
+      )}
 
-        <Header status={status} />
-
-        {error && (
-          <div className="px-4 py-2 bg-red-500/20 text-red-400 text-xs">
-            Error: {error}
-          </div>
-        )}
-
-        <div className="flex-1">
-          {status.is_active ? (
-            <Timer
-              remainingSeconds={status.remaining_seconds}
-              totalSeconds={status.total_seconds}
-              mode={status.mode}
-              onStop={deactivate}
+      <div className="flex-1">
+        {status.is_active ? (
+          <Timer
+            remainingSeconds={status.remaining_seconds}
+            totalSeconds={status.total_seconds}
+            mode={status.mode}
+            onStop={deactivate}
+          />
+        ) : (
+          <>
+            <ModeSelect
+              selected={selectedMode}
+              onChange={setSelectedMode}
+              disabled={loading}
             />
-          ) : (
-            <>
-              <ModeSelect
-                selected={selectedMode}
-                onChange={setSelectedMode}
-                disabled={loading}
-              />
-              <DurationPicker onSelect={handleActivate} disabled={loading} />
-            </>
-          )}
-        </div>
+            <DurationPicker onSelect={handleActivate} disabled={loading} />
+          </>
+        )}
+      </div>
 
-        <footer className="px-4 py-2 border-t border-white/10 flex items-center justify-between">
-          <button
-            onClick={toggleAutostart}
-            className="flex items-center gap-2 text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
+      <footer className="px-4 py-2 border-t border-white/10 flex items-center justify-between">
+        <button
+          onClick={toggleAutostart}
+          className="flex items-center gap-2 text-xs text-neutral-500 hover:text-neutral-300 transition-colors"
+        >
+          <div
+            className={`w-8 h-4 rounded-full transition-colors ${
+              autostart ? "bg-amber-600" : "bg-white/20"
+            }`}
           >
             <div
-              className={`w-8 h-4 rounded-full transition-colors ${
-                autostart ? "bg-amber-600" : "bg-white/20"
+              className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                autostart ? "translate-x-4" : "translate-x-0"
               }`}
-            >
-              <div
-                className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${
-                  autostart ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
-            </div>
-            <span>Launch at Login</span>
-          </button>
-          <div className="flex items-center gap-3">
-            {version && (
-              <span className="text-[10px] text-neutral-600">v{version}</span>
-            )}
-            <a
-              href="https://github.com/tasnimzotder/caffeinator"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-neutral-500 hover:text-neutral-300 transition-colors"
-            >
-              <Github size={14} />
-            </a>
-            <button
-              onClick={() => invoke("quit_app")}
-              className="text-neutral-500 hover:text-red-400 transition-colors"
-            >
-              <LogOut size={14} />
-            </button>
+            />
           </div>
-        </footer>
-      </div>
+          <span>Launch at Login</span>
+        </button>
+        <div className="flex items-center gap-3">
+          {version && (
+            <span className="text-[10px] text-neutral-600">v{version}</span>
+          )}
+          <a
+            href="https://github.com/tasnimzotder/caffeinator"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-neutral-500 hover:text-neutral-300 transition-colors"
+          >
+            <Github size={14} />
+          </a>
+          <button
+            onClick={() => invoke("quit_app")}
+            className="text-neutral-500 hover:text-red-400 transition-colors"
+          >
+            <LogOut size={14} />
+          </button>
+        </div>
+      </footer>
     </div>
   );
 }

@@ -26,6 +26,7 @@ struct InnerState {
     mode: Option<AssertionType>,
     start_time: Option<Instant>,
     duration: Option<Duration>,
+    lid_close_active: bool,
 }
 
 pub struct AppState {
@@ -40,6 +41,7 @@ impl Default for AppState {
                 mode: None,
                 start_time: None,
                 duration: None,
+                lid_close_active: false,
             }),
         }
     }
@@ -60,7 +62,7 @@ impl AppState {
                         Some((dur - elapsed).as_secs())
                     }
                 }
-                _ => None, // Indefinite
+                _ => None,
             }
         } else {
             None
@@ -79,25 +81,30 @@ impl AppState {
     pub fn set_active(&self, id: u32, mode: AssertionType, duration_secs: Option<u64>) {
         let mut inner = self.inner.lock().unwrap();
         inner.assertion_id = id;
+        inner.lid_close_active = mode.needs_lid_close_prevention();
         inner.mode = Some(mode);
         inner.start_time = Some(Instant::now());
         inner.duration = duration_secs.map(Duration::from_secs);
     }
 
-    /// Release any active assertion and clear state.
-    /// Takes the assertion ID atomically, clears state, then releases outside the lock.
+    /// Release any active assertion, restore lid-close sleep, and clear state.
     pub fn deactivate_if_active(&self) -> Result<(), String> {
-        let assertion_id = {
+        let (assertion_id, lid_close_active) = {
             let mut inner = self.inner.lock().unwrap();
             let id = inner.assertion_id;
+            let lid = inner.lid_close_active;
             inner.assertion_id = 0;
             inner.mode = None;
             inner.start_time = None;
             inner.duration = None;
-            id
+            inner.lid_close_active = false;
+            (id, lid)
         };
         if assertion_id != 0 {
             power::release_assertion(assertion_id)?;
+        }
+        if lid_close_active {
+            power::disable_lid_close_prevention();
         }
         Ok(())
     }

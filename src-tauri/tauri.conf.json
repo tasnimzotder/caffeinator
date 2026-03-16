@@ -19,13 +19,11 @@
         "resizable": false,
         "visible": false,
         "decorations": false,
-        "transparent": true,
-        "shadow": false,
         "skipTaskbar": true,
-        "alwaysOnTop": true
+        "alwaysOnTop": true,
+        "backgroundColor": [20, 18, 16, 255]
       }
     ],
-    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }

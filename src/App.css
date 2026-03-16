@@ -18,26 +18,10 @@ html, body, #root {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: transparent;
 }
 
-#root {
-  opacity: 0;
-  transition: opacity 150ms ease-out;
-}
-
-#root.window-visible {
-  opacity: 1;
-}
-
-.app-container {
-  background: rgba(20, 18, 16, 0.96);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3), 0 25px 50px -12px rgba(0, 0, 0, 0.6);
-  overflow: hidden;
+body {
+  background: rgb(20, 18, 16);
 }
 
 @keyframes ring-pulse {

@@ -25,7 +25,15 @@ export function useCaffeinate() {
   const fetchingRef = useRef(false);
   const prevTrayTitleRef = useRef("");
 
+  const prevTrayActiveRef = useRef(false);
+
   const updateTray = useCallback(async (s: CaffeinateStatus) => {
+    // Switch tray icon on state change
+    if (s.is_active !== prevTrayActiveRef.current) {
+      prevTrayActiveRef.current = s.is_active;
+      invoke("set_tray_active", { active: s.is_active }).catch(() => {});
+    }
+
     const title = s.is_active
       ? (s.remaining_seconds !== null ? formatTrayTime(s.remaining_seconds) : "∞")
       : "";

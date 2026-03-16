@@ -1,7 +1,10 @@
 use crate::power::{self, AssertionType, PowerProfile};
 use crate::state::{AppState, CaffeinateStatus};
-use tauri::{AppHandle, State};
+use tauri::{image::Image, AppHandle, State};
 use tauri_plugin_autostart::ManagerExt;
+
+const ICON_INACTIVE: &[u8] = include_bytes!("../icons/tray-icon@2x.png");
+const ICON_ACTIVE: &[u8] = include_bytes!("../icons/tray-icon-active@2x.png");
 
 #[tauri::command]
 pub fn activate(
@@ -12,13 +15,25 @@ pub fn activate(
     // Deactivate any existing assertion first
     state.deactivate_if_active()?;
 
-    // Create new assertion
+    // For LidClose mode, enable pmset disablesleep first (prompts for admin)
+    if mode.needs_lid_close_prevention() {
+        power::enable_lid_close_prevention()?;
+    }
+
+    // Create IOKit assertion
     let reason = format!("Caffeinator: Preventing {} sleep", mode.display_name());
-    let assertion_id = power::create_assertion(mode, &reason)?;
+    let assertion_id = match power::create_assertion(mode, &reason) {
+        Ok(id) => id,
+        Err(e) => {
+            // Rollback lid-close if IOKit assertion fails
+            if mode.needs_lid_close_prevention() {
+                power::disable_lid_close_prevention();
+            }
+            return Err(e);
+        }
+    };
 
-    // Update state
     state.set_active(assertion_id, mode, duration_secs);
-
     Ok(state.get_status())
 }
 
@@ -61,6 +76,16 @@ pub fn toggle(
 pub fn update_tray_title(title: String, app: AppHandle) -> Result<(), String> {
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_title(Some(&title)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_tray_active(active: bool, app: AppHandle) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main") {
+        let bytes = if active { ICON_ACTIVE } else { ICON_INACTIVE };
+        let img = Image::from_bytes(bytes).map_err(|e| e.to_string())?;
+        tray.set_icon(Some(img)).map_err(|e| e.to_string())?;
     }
     Ok(())
 }

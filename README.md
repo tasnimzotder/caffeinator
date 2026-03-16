@@ -15,24 +15,28 @@
 
 ## Features
 
-- **Sleep Prevention Modes** — Idle, Display, Network, or Background via native IOKit assertions
+- **Sleep Prevention Modes** — Idle, Display, Lid Close, Network, or Background
+- **Lid Close Prevention** — Keep your Mac awake even with the lid closed (requires admin password)
 - **Timer Presets** — 30m, 1h, 2h, 4h, or indefinite
 - **Custom Duration** — Set any hours + minutes combination
 - **Circular Progress Ring** — Animated countdown with amber glow
 - **Menu Bar Timer** — Remaining time displayed next to the tray icon
+- **Quick Start from Tray** — Right-click the menu bar icon to start a session without opening the window
 - **Click Outside to Close** — Window hides when it loses focus
-- **Tray Positioning** — Window appears centered below the menu bar icon
 - **Launch at Login** — Start automatically on login
 - **Power Profile** — View current sleep settings and active system assertions
 
 ## Modes
 
-| Mode | IOKit Assertion | Behavior |
-|------|----------------|----------|
-| **Idle** | `PreventUserIdleSystemSleep` | Prevents idle system sleep. Display may still dim or turn off. |
-| **Display** | `PreventUserIdleDisplaySleep` | Keeps display on and prevents idle sleep. Lid close still sleeps. |
-| **Network** | `NetworkClientActive` | Keeps system awake while serving network clients (file sharing, etc.). |
-| **Background** | `BackgroundTask` | Keeps process running for background work. System may enter low power. |
+| Mode | Mechanism | Behavior |
+|------|-----------|----------|
+| **Idle** | IOKit `PreventUserIdleSystemSleep` | Prevents idle system sleep. Display may still dim or turn off. |
+| **Display** | IOKit `PreventUserIdleDisplaySleep` | Keeps display on and prevents idle sleep. |
+| **Lid Close** | `pmset disablesleep` + IOKit | Prevents all sleep including lid close. Requires admin password. Use with caution. |
+| **Network** | IOKit `NetworkClientActive` | Keeps system awake while serving network clients (file sharing, etc.). |
+| **Background** | IOKit `BackgroundTask` | Keeps process running for background work. System may enter low power. |
+
+> **Note:** Lid Close mode uses `sudo pmset -b disablesleep 1` which disables all system sleep. If the app is force-quit without deactivating, run `sudo pmset -b disablesleep 0` manually to restore normal sleep behavior.
 
 ## Installation
 
