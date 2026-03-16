@@ -1,4 +1,4 @@
-use crate::power::AssertionType;
+use crate::power::{self, AssertionType};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -21,35 +21,37 @@ impl Default for CaffeinateStatus {
     }
 }
 
+struct InnerState {
+    assertion_id: u32,
+    mode: Option<AssertionType>,
+    start_time: Option<Instant>,
+    duration: Option<Duration>,
+}
+
 pub struct AppState {
-    pub assertion_id: Mutex<u32>,
-    pub mode: Mutex<Option<AssertionType>>,
-    pub start_time: Mutex<Option<Instant>>,
-    pub duration: Mutex<Option<Duration>>,
+    inner: Mutex<InnerState>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            assertion_id: Mutex::new(0),
-            mode: Mutex::new(None),
-            start_time: Mutex::new(None),
-            duration: Mutex::new(None),
+            inner: Mutex::new(InnerState {
+                assertion_id: 0,
+                mode: None,
+                start_time: None,
+                duration: None,
+            }),
         }
     }
 }
 
 impl AppState {
     pub fn get_status(&self) -> CaffeinateStatus {
-        let assertion_id = *self.assertion_id.lock().unwrap();
-        let mode = *self.mode.lock().unwrap();
-        let start_time = *self.start_time.lock().unwrap();
-        let duration = *self.duration.lock().unwrap();
-
-        let is_active = assertion_id != 0;
+        let inner = self.inner.lock().unwrap();
+        let is_active = inner.assertion_id != 0;
 
         let remaining_seconds = if is_active {
-            match (start_time, duration) {
+            match (inner.start_time, inner.duration) {
                 (Some(start), Some(dur)) => {
                     let elapsed = start.elapsed();
                     if elapsed >= dur {
@@ -64,42 +66,39 @@ impl AppState {
             None
         };
 
-        let total_seconds = duration.map(|d| d.as_secs());
+        let total_seconds = inner.duration.map(|d| d.as_secs());
 
         CaffeinateStatus {
             is_active,
-            mode,
+            mode: inner.mode,
             remaining_seconds,
             total_seconds,
         }
     }
 
     pub fn set_active(&self, id: u32, mode: AssertionType, duration_secs: Option<u64>) {
-        *self.assertion_id.lock().unwrap() = id;
-        *self.mode.lock().unwrap() = Some(mode);
-        *self.start_time.lock().unwrap() = Some(Instant::now());
-        *self.duration.lock().unwrap() = duration_secs.map(Duration::from_secs);
+        let mut inner = self.inner.lock().unwrap();
+        inner.assertion_id = id;
+        inner.mode = Some(mode);
+        inner.start_time = Some(Instant::now());
+        inner.duration = duration_secs.map(Duration::from_secs);
     }
 
-    pub fn clear(&self) {
-        *self.assertion_id.lock().unwrap() = 0;
-        *self.mode.lock().unwrap() = None;
-        *self.start_time.lock().unwrap() = None;
-        *self.duration.lock().unwrap() = None;
-    }
-
-    pub fn get_assertion_id(&self) -> u32 {
-        *self.assertion_id.lock().unwrap()
-    }
-
-    #[allow(dead_code)]
-    pub fn is_expired(&self) -> bool {
-        let start_time = *self.start_time.lock().unwrap();
-        let duration = *self.duration.lock().unwrap();
-
-        match (start_time, duration) {
-            (Some(start), Some(dur)) => start.elapsed() >= dur,
-            _ => false,
+    /// Release any active assertion and clear state.
+    /// Takes the assertion ID atomically, clears state, then releases outside the lock.
+    pub fn deactivate_if_active(&self) -> Result<(), String> {
+        let assertion_id = {
+            let mut inner = self.inner.lock().unwrap();
+            let id = inner.assertion_id;
+            inner.assertion_id = 0;
+            inner.mode = None;
+            inner.start_time = None;
+            inner.duration = None;
+            id
+        };
+        if assertion_id != 0 {
+            power::release_assertion(assertion_id)?;
         }
+        Ok(())
     }
 }

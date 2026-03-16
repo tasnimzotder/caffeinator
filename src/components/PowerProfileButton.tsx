@@ -55,7 +55,7 @@ export function PowerProfileButton() {
             className="absolute inset-0 bg-black/50"
             onClick={() => setIsOpen(false)}
           />
-          <div className="relative bg-neutral-900 rounded-xl p-4 w-72 max-h-80 overflow-y-auto shadow-2xl border border-white/10">
+          <div className="relative rounded-xl p-4 w-72 max-h-80 overflow-y-auto shadow-2xl border border-white/10" style={{ background: "rgba(20, 18, 16, 0.98)" }}>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-medium text-white">Power Profile</h2>
               <button
@@ -82,9 +82,9 @@ export function PowerProfileButton() {
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm">
                   {profile.source === "AC Power" ? (
-                    <Plug size={14} className="text-emerald-400" />
+                    <Plug size={14} className="text-amber-400" />
                   ) : (
-                    <Battery size={14} className="text-yellow-400" />
+                    <Battery size={14} className="text-amber-400" />
                   )}
                   <span className="text-white">{profile.source}</span>
                 </div>

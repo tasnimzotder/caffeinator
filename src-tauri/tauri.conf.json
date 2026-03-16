@@ -14,16 +14,18 @@
       {
         "label": "main",
         "title": "Caffeinator",
-        "width": 320,
-        "height": 480,
+        "width": 380,
+        "height": 520,
         "resizable": false,
         "visible": false,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "skipTaskbar": true,
         "alwaysOnTop": true
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }

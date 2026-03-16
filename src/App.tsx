@@ -21,6 +21,24 @@ function App() {
     getVersion().then(setVersion).catch(() => {});
   }, []);
 
+  // Window fade-in on visibility change
+  useEffect(() => {
+    const root = document.getElementById("root");
+    if (!root) return;
+
+    const show = () => {
+      if (document.visibilityState === "visible") {
+        root.classList.add("window-visible");
+      } else {
+        root.classList.remove("window-visible");
+      }
+    };
+
+    root.classList.add("window-visible");
+    document.addEventListener("visibilitychange", show);
+    return () => document.removeEventListener("visibilitychange", show);
+  }, []);
+
   const toggleAutostart = async () => {
     const newValue = !autostart;
     try {
@@ -38,7 +56,15 @@ function App() {
   return (
     <div className="h-screen p-2">
       <div className="app-container h-full flex flex-col">
-        <Header status={status} onStop={deactivate} />
+        {/* Drag region — entire top strip */}
+        <div
+          data-tauri-drag-region
+          className="flex items-center justify-center pt-2 pb-1 cursor-grab active:cursor-grabbing"
+        >
+          <div className="w-10 h-1 rounded-full bg-white/20 pointer-events-none" />
+        </div>
+
+        <Header status={status} />
 
         {error && (
           <div className="px-4 py-2 bg-red-500/20 text-red-400 text-xs">
@@ -52,6 +78,7 @@ function App() {
               remainingSeconds={status.remaining_seconds}
               totalSeconds={status.total_seconds}
               mode={status.mode}
+              onStop={deactivate}
             />
           ) : (
             <>
@@ -72,7 +99,7 @@ function App() {
           >
             <div
               className={`w-8 h-4 rounded-full transition-colors ${
-                autostart ? "bg-emerald-600" : "bg-white/20"
+                autostart ? "bg-amber-600" : "bg-white/20"
               }`}
             >
               <div

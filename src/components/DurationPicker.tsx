@@ -34,7 +34,7 @@ export function DurationPicker({ onSelect, disabled }: DurationPickerProps) {
               max={24}
               value={hours}
               onChange={(e) => setHours(Math.max(0, parseInt(e.target.value) || 0))}
-              className="w-full mt-1 px-3 py-2 rounded-lg bg-white/5 text-white border border-white/10 focus:border-white/20 focus:outline-none"
+              className="w-full mt-1 px-3 py-2 rounded-lg bg-white/5 text-white border border-white/10 focus:border-amber-500/40 focus:outline-none transition-colors"
             />
           </div>
           <div className="flex-1">
@@ -47,7 +47,7 @@ export function DurationPicker({ onSelect, disabled }: DurationPickerProps) {
               onChange={(e) =>
                 setMinutes(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))
               }
-              className="w-full mt-1 px-3 py-2 rounded-lg bg-white/5 text-white border border-white/10 focus:border-white/20 focus:outline-none"
+              className="w-full mt-1 px-3 py-2 rounded-lg bg-white/5 text-white border border-white/10 focus:border-amber-500/40 focus:outline-none transition-colors"
             />
           </div>
         </div>
@@ -61,7 +61,7 @@ export function DurationPicker({ onSelect, disabled }: DurationPickerProps) {
           <button
             onClick={handleCustomSubmit}
             disabled={hours === 0 && minutes === 0}
-            className="flex-1 px-3 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+            className="flex-1 px-3 py-2 rounded-lg text-sm font-medium bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-50 transition-colors"
           >
             Start
           </button>
@@ -81,7 +81,7 @@ export function DurationPicker({ onSelect, disabled }: DurationPickerProps) {
             key={label}
             onClick={() => onSelect(seconds)}
             disabled={disabled}
-            className="flex-1 px-3 py-2.5 rounded-lg text-sm font-medium bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-50 transition-all"
+            className="flex-1 min-w-0 px-3 py-2.5 rounded-lg text-sm font-medium bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-50 transition-all"
           >
             {label}
           </button>

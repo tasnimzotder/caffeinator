@@ -10,11 +10,7 @@ pub fn activate(
     state: State<AppState>,
 ) -> Result<CaffeinateStatus, String> {
     // Deactivate any existing assertion first
-    let current_id = state.get_assertion_id();
-    if current_id != 0 {
-        power::release_assertion(current_id)?;
-        state.clear();
-    }
+    state.deactivate_if_active()?;
 
     // Create new assertion
     let reason = format!("Caffeinator: Preventing {} sleep", mode.display_name());
@@ -31,13 +27,9 @@ pub fn deactivate(
     state: State<AppState>,
     app: AppHandle,
 ) -> Result<CaffeinateStatus, String> {
-    let current_id = state.get_assertion_id();
-    if current_id != 0 {
-        power::release_assertion(current_id)?;
-    }
-    state.clear();
+    state.deactivate_if_active()?;
 
-    // Clear tray title - use empty string for macOS
+    // Clear tray title
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_title(Some(""));
     }
@@ -68,14 +60,7 @@ pub fn toggle(
 #[tauri::command]
 pub fn update_tray_title(title: String, app: AppHandle) -> Result<(), String> {
     if let Some(tray) = app.tray_by_id("main") {
-        // Use the title as-is, empty string clears on macOS
-        if title.is_empty() {
-            tray.set_title(Some(""))
-                .map_err(|e| e.to_string())?;
-        } else {
-            tray.set_title(Some(title.as_str()))
-                .map_err(|e| e.to_string())?;
-        }
+        tray.set_title(Some(&title)).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -87,11 +72,7 @@ pub fn get_power_profile() -> Result<PowerProfile, String> {
 
 #[tauri::command]
 pub fn quit_app(state: State<AppState>, app: AppHandle) {
-    // Clean up any active assertion before quitting
-    let assertion_id = state.get_assertion_id();
-    if assertion_id != 0 {
-        let _ = power::release_assertion(assertion_id);
-    }
+    let _ = state.deactivate_if_active();
     app.exit(0);
 }
 

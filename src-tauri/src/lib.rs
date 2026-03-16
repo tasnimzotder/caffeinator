@@ -3,41 +3,51 @@ mod power;
 mod state;
 
 use state::AppState;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     include_image,
     menu::{Menu, MenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_positioner::{Position, WindowExt};
+
+/// Timestamp of last focus loss — used to debounce tray icon toggle
+static LAST_FOCUS_LOST_MS: AtomicI64 = AtomicI64::new(0);
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
 
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    // Create menu for right-click
     let quit = MenuItem::with_id(app, "quit", "Quit Caffeinator", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&quit])?;
 
-    // Build tray icon programmatically
     let tray = TrayIconBuilder::with_id("main")
-        .icon(include_image!("icons/32x32.png"))
+        .icon(include_image!("icons/tray-icon@2x.png"))
         .icon_as_template(true)
         .menu(&menu)
-        .show_menu_on_left_click(false) // Critical: don't open menu on left click
+        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
             if event.id.as_ref() == "quit" {
-                // Clean up any active assertion before quitting
                 if let Some(state) = app.try_state::<AppState>() {
-                    let assertion_id = state.get_assertion_id();
-                    if assertion_id != 0 {
-                        let _ = power::release_assertion(assertion_id);
-                    }
+                    let _ = state.deactivate_if_active();
                 }
                 app.exit(0);
             }
         })
         .on_tray_icon_event(|tray, event| {
+            // Forward event to positioner so it tracks tray icon location
+            tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
+
             if let TrayIconEvent::Click {
-                button: tauri::tray::MouseButton::Left,
-                button_state: tauri::tray::MouseButtonState::Up,
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
                 ..
             } = event
             {
@@ -46,7 +56,14 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
                     } else {
-                        let _ = window.unminimize();
+                        // If the window was just hidden by focus loss (< 300ms ago),
+                        // the user clicked the tray icon to dismiss — don't re-show.
+                        let elapsed = now_ms() - LAST_FOCUS_LOST_MS.load(Ordering::SeqCst);
+                        if elapsed < 300 {
+                            return;
+                        }
+                        // Position centered below the tray icon
+                        let _ = window.as_ref().window().move_window(Position::TrayCenter);
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
@@ -55,9 +72,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         })
         .build(app)?;
 
-    // Keep tray reference alive (it's stored in app state automatically)
     let _ = tray;
-
     Ok(())
 }
 
@@ -65,12 +80,19 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
         .manage(AppState::default())
+        .on_window_event(|window, event| {
+            // Hide when clicking outside the window (focus loss)
+            if let tauri::WindowEvent::Focused(false) = event {
+                LAST_FOCUS_LOST_MS.store(now_ms(), Ordering::SeqCst);
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::activate,
             commands::deactivate,
@@ -82,16 +104,9 @@ pub fn run() {
             commands::get_autostart_enabled,
             commands::set_autostart_enabled,
         ])
-        // Focus loss handler commented out for debugging
-        // .on_window_event(|window, event| {
-        //     if let WindowEvent::Focused(false) = event {
-        //         let _ = window.hide();
-        //     }
-        // })
         .setup(|app| {
             setup_tray(app)?;
 
-            // Hide dock icon on macOS for menu bar app behavior
             #[cfg(target_os = "macos")]
             {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);

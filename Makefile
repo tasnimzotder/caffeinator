@@ -3,6 +3,8 @@
 
 .PHONY: dev build dmg clean install help
 
+VERSION := $(shell awk -F'"' '/"version"/{print $$4; exit}' src-tauri/tauri.conf.json)
+
 # Default target
 all: build
 
@@ -13,7 +15,7 @@ dev:
 
 # Build release version (.app bundle only)
 build:
-	@echo "Building Caffeinator (Release)..."
+	@echo "Building Caffeinator $(VERSION) (Release)..."
 	bun run tauri build --bundles app
 
 # Build DMG (creates .app first, then DMG manually)
@@ -21,8 +23,8 @@ dmg: build
 	@echo "Creating DMG..."
 	cd src-tauri/target/release/bundle && \
 	rm -f Caffeinator_*.dmg && \
-	hdiutil create -volname "Caffeinator" -srcfolder macos/Caffeinator.app -ov -format UDZO Caffeinator_0.1.0_aarch64.dmg
-	@echo "DMG created at src-tauri/target/release/bundle/Caffeinator_0.1.0_aarch64.dmg"
+	hdiutil create -volname "Caffeinator" -srcfolder macos/Caffeinator.app -ov -format UDZO Caffeinator_$(VERSION)_aarch64.dmg
+	@echo "DMG created at src-tauri/target/release/bundle/Caffeinator_$(VERSION)_aarch64.dmg"
 
 # Clean build artifacts
 clean:

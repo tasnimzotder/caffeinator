@@ -18,44 +18,36 @@ function formatTrayTime(seconds: number): string {
   return `${m}m`;
 }
 
-async function updateTrayTitle(status: CaffeinateStatus) {
-  try {
-    if (status.is_active) {
-      const title =
-        status.remaining_seconds !== null
-          ? formatTrayTime(status.remaining_seconds)
-          : "∞";
-      await invoke("update_tray_title", { title });
-    } else {
-      await invoke("update_tray_title", { title: "" });
-    }
-  } catch {
-    // Ignore tray update errors
-  }
-}
-
 export function useCaffeinate() {
   const [status, setStatus] = useState<CaffeinateStatus>(DEFAULT_STATUS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const statusRef = useRef(status);
   const fetchingRef = useRef(false);
+  const prevTrayTitleRef = useRef("");
 
-  // Keep ref in sync with state
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
+  const updateTray = useCallback(async (s: CaffeinateStatus) => {
+    const title = s.is_active
+      ? (s.remaining_seconds !== null ? formatTrayTime(s.remaining_seconds) : "∞")
+      : "";
+
+    if (title === prevTrayTitleRef.current) return;
+    prevTrayTitleRef.current = title;
+
+    try {
+      await invoke("update_tray_title", { title });
+    } catch {
+      // Ignore tray update errors
+    }
+  }, []);
 
   const fetchStatus = useCallback(async () => {
-    // Prevent concurrent fetches
     if (fetchingRef.current) return;
     fetchingRef.current = true;
 
     try {
       const result = await invoke<CaffeinateStatus>("get_status");
       setStatus(result);
-      statusRef.current = result;
-      updateTrayTitle(result);
+      updateTray(result);
       setError(null);
 
       // Auto-deactivate when timer expires
@@ -63,15 +55,14 @@ export function useCaffeinate() {
         await invoke("deactivate");
         const newStatus = await invoke<CaffeinateStatus>("get_status");
         setStatus(newStatus);
-        statusRef.current = newStatus;
-        updateTrayTitle(newStatus);
+        updateTray(newStatus);
       }
     } catch (e) {
       setError(String(e));
     } finally {
       fetchingRef.current = false;
     }
-  }, []);
+  }, [updateTray]);
 
   const activate = useCallback(
     async (mode: AssertionType, durationSecs: number | null) => {
@@ -83,15 +74,14 @@ export function useCaffeinate() {
           durationSecs,
         });
         setStatus(result);
-        statusRef.current = result;
-        updateTrayTitle(result);
+        updateTray(result);
       } catch (e) {
         setError(String(e));
       } finally {
         setLoading(false);
       }
     },
-    []
+    [updateTray]
   );
 
   const deactivate = useCallback(async () => {
@@ -100,46 +90,18 @@ export function useCaffeinate() {
     try {
       const result = await invoke<CaffeinateStatus>("deactivate");
       setStatus(result);
-      statusRef.current = result;
-      updateTrayTitle(result);
+      updateTray(result);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [updateTray]);
 
-  const toggle = useCallback(
-    async (mode: AssertionType, durationSecs: number | null) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const result = await invoke<CaffeinateStatus>("toggle", {
-          mode,
-          durationSecs,
-        });
-        setStatus(result);
-        statusRef.current = result;
-        updateTrayTitle(result);
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setLoading(false);
-      }
-    },
-    []
-  );
-
-  // Poll status every second to update countdown
+  // Initial fetch + visibility listener
   useEffect(() => {
     fetchStatus();
 
-    // Always poll every second to catch state changes
-    const interval = setInterval(() => {
-      fetchStatus();
-    }, 1000);
-
-    // Refresh when window becomes visible
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         fetchStatus();
@@ -148,10 +110,17 @@ export function useCaffeinate() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [fetchStatus]);
+
+  // Poll every second only when active
+  useEffect(() => {
+    if (!status.is_active) return;
+
+    const interval = setInterval(fetchStatus, 1000);
+    return () => clearInterval(interval);
+  }, [fetchStatus, status.is_active]);
 
   return {
     status,
@@ -159,7 +128,6 @@ export function useCaffeinate() {
     error,
     activate,
     deactivate,
-    toggle,
     refresh: fetchStatus,
   };
 }

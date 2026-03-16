@@ -1,6 +1,5 @@
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 #[link(name = "IOKit", kind = "framework")]
 extern "C" {
@@ -20,7 +19,6 @@ const K_IOPM_ASSERTION_LEVEL_ON: u32 = 255;
 pub enum AssertionType {
     NoIdleSleep,
     NoDisplaySleep,
-    PreventSystemSleep,
     NetworkActive,
     BackgroundTask,
 }
@@ -30,7 +28,6 @@ impl AssertionType {
         let s = match self {
             AssertionType::NoIdleSleep => "PreventUserIdleSystemSleep",
             AssertionType::NoDisplaySleep => "PreventUserIdleDisplaySleep",
-            AssertionType::PreventSystemSleep => "PreventSystemSleep",
             AssertionType::NetworkActive => "NetworkClientActive",
             AssertionType::BackgroundTask => "BackgroundTask",
         };
@@ -41,14 +38,11 @@ impl AssertionType {
         match self {
             AssertionType::NoIdleSleep => "Idle",
             AssertionType::NoDisplaySleep => "Display",
-            AssertionType::PreventSystemSleep => "System",
             AssertionType::NetworkActive => "Network",
             AssertionType::BackgroundTask => "Background",
         }
     }
 }
-
-static CURRENT_ASSERTION_ID: AtomicU32 = AtomicU32::new(0);
 
 pub fn create_assertion(assertion_type: AssertionType, reason: &str) -> Result<u32, String> {
     let type_cf = assertion_type.as_cfstring();
@@ -65,7 +59,6 @@ pub fn create_assertion(assertion_type: AssertionType, reason: &str) -> Result<u
     };
 
     if result == 0 {
-        CURRENT_ASSERTION_ID.store(assertion_id, Ordering::SeqCst);
         Ok(assertion_id)
     } else {
         Err(format!("Failed to create power assertion: error code {}", result))
@@ -80,21 +73,10 @@ pub fn release_assertion(assertion_id: u32) -> Result<(), String> {
     let result = unsafe { IOPMAssertionRelease(assertion_id) };
 
     if result == 0 {
-        CURRENT_ASSERTION_ID.store(0, Ordering::SeqCst);
         Ok(())
     } else {
         Err(format!("Failed to release power assertion: error code {}", result))
     }
-}
-
-#[allow(dead_code)]
-pub fn get_current_assertion_id() -> u32 {
-    CURRENT_ASSERTION_ID.load(Ordering::SeqCst)
-}
-
-#[allow(dead_code)]
-pub fn has_active_assertion() -> bool {
-    get_current_assertion_id() != 0
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

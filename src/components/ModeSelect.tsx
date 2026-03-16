@@ -1,5 +1,5 @@
-import { Moon, Monitor, Zap, Wifi, Cog } from "lucide-react";
 import type { AssertionType } from "../types";
+import { MODE_INFO } from "../types";
 
 interface ModeSelectProps {
   selected: AssertionType;
@@ -7,12 +7,11 @@ interface ModeSelectProps {
   disabled?: boolean;
 }
 
-const MODES: { type: AssertionType; label: string; Icon: typeof Moon; description: string }[] = [
-  { type: "NoIdleSleep", label: "Idle", Icon: Moon, description: "Prevents system from sleeping when idle. Display may still turn off." },
-  { type: "NoDisplaySleep", label: "Display", Icon: Monitor, description: "Keeps display on and prevents idle sleep." },
-  { type: "PreventSystemSleep", label: "System", Icon: Zap, description: "Prevents all sleep, even when lid is closed (AC power only)." },
-  { type: "NetworkActive", label: "Network", Icon: Wifi, description: "Keeps network connections alive for downloads and uploads." },
-  { type: "BackgroundTask", label: "Background", Icon: Cog, description: "Allows background tasks to complete, may enter low power mode." },
+const MODES: AssertionType[] = [
+  "NoIdleSleep",
+  "NoDisplaySleep",
+  "NetworkActive",
+  "BackgroundTask",
 ];
 
 export function ModeSelect({ selected, onChange, disabled }: ModeSelectProps) {
@@ -21,23 +20,26 @@ export function ModeSelect({ selected, onChange, disabled }: ModeSelectProps) {
       <p className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider mb-2">
         Mode
       </p>
-      <div className="grid grid-cols-3 gap-2">
-        {MODES.map(({ type, label, Icon, description }) => (
-          <button
-            key={type}
-            onClick={() => onChange(type)}
-            disabled={disabled}
-            title={description}
-            className={`flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-lg text-xs font-medium transition-all ${
-              selected === type
-                ? "bg-white/15 text-white ring-1 ring-white/20"
-                : "bg-white/5 text-neutral-400 hover:bg-white/10 hover:text-neutral-200"
-            } disabled:opacity-50`}
-          >
-            <Icon size={18} strokeWidth={1.5} />
-            <span>{label}</span>
-          </button>
-        ))}
+      <div className="grid grid-cols-2 gap-2">
+        {MODES.map((type) => {
+          const { label, icon: Icon, description } = MODE_INFO[type];
+          return (
+            <button
+              key={type}
+              onClick={() => onChange(type)}
+              disabled={disabled}
+              title={description}
+              className={`flex flex-col items-center gap-1.5 px-2 py-2.5 rounded-lg text-xs font-medium transition-all duration-150 ${
+                selected === type
+                  ? "bg-amber-500/10 text-white ring-1 ring-amber-500/40 shadow-[0_0_20px_rgba(245,158,11,0.15)]"
+                  : "bg-white/5 text-neutral-400 hover:bg-white/10 hover:text-neutral-200 hover:scale-[1.02]"
+              } active:scale-95 disabled:opacity-50`}
+            >
+              <Icon size={18} strokeWidth={1.5} />
+              <span>{label}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
