@@ -27,11 +27,22 @@ fn now_ms() -> i64 {
 const ICON_INACTIVE: &[u8] = include_bytes!("../icons/tray-icon@2x.png");
 const ICON_ACTIVE: &[u8] = include_bytes!("../icons/tray-icon-active@2x.png");
 
+fn format_tray_time(seconds: u64) -> String {
+    let h = seconds / 3600;
+    let m = (seconds % 3600) / 60;
+    if h > 0 {
+        format!("{}:{:02}", h, m)
+    } else {
+        format!("{}m", m)
+    }
+}
+
 fn set_tray_icon(app: &tauri::AppHandle, active: bool) {
     if let Some(tray) = app.tray_by_id("main") {
         let bytes = if active { ICON_ACTIVE } else { ICON_INACTIVE };
         if let Ok(img) = Image::from_bytes(bytes) {
             let _ = tray.set_icon(Some(img));
+            let _ = tray.set_icon_as_template(true);
         }
     }
 }
@@ -91,6 +102,14 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                         if let Ok(assertion_id) = power::create_assertion(mode, &reason) {
                             state.set_active(assertion_id, mode, duration_secs);
                             set_tray_icon(app, true);
+                            // Set initial tray title immediately
+                            if let Some(tray) = app.tray_by_id("main") {
+                                let title = match duration_secs {
+                                    Some(secs) => format_tray_time(secs),
+                                    None => "∞".to_string(),
+                                };
+                                let _ = tray.set_title(Some(&title));
+                            }
                         }
                     }
                 }
@@ -163,6 +182,45 @@ pub fn run() {
             {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
+
+            // Background timer: updates tray title every second, independent of webview
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut prev_title = String::new();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let status = state.get_status();
+
+                        // Auto-deactivate when timer expires
+                        if status.is_active && status.remaining_seconds == Some(0) {
+                            let _ = state.deactivate_if_active();
+                            if let Some(tray) = app_handle.tray_by_id("main") {
+                                let _ = tray.set_title(Some(""));
+                            }
+                            set_tray_icon(&app_handle, false);
+                            prev_title.clear();
+                            continue;
+                        }
+
+                        let title = if status.is_active {
+                            match status.remaining_seconds {
+                                Some(secs) => format_tray_time(secs),
+                                None => "∞".to_string(),
+                            }
+                        } else {
+                            String::new()
+                        };
+
+                        if title != prev_title {
+                            if let Some(tray) = app_handle.tray_by_id("main") {
+                                let _ = tray.set_title(Some(&title));
+                            }
+                            prev_title = title;
+                        }
+                    }
+                }
+            });
 
             Ok(())
         })

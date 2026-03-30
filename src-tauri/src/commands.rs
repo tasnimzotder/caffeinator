@@ -86,6 +86,7 @@ pub fn set_tray_active(active: bool, app: AppHandle) -> Result<(), String> {
         let bytes = if active { ICON_ACTIVE } else { ICON_INACTIVE };
         let img = Image::from_bytes(bytes).map_err(|e| e.to_string())?;
         tray.set_icon(Some(img)).map_err(|e| e.to_string())?;
+        tray.set_icon_as_template(true).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
