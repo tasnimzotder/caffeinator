@@ -23,3 +23,5 @@ tokio = { version = "1", features = ["time", "sync"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = ["NSWindow", "NSResponder"] }

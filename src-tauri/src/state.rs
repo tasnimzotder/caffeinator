@@ -27,14 +27,18 @@ struct InnerState {
     start_time: Option<Instant>,
     duration: Option<Duration>,
     lid_close_active: bool,
+    /// Sticky mode chosen via the tray "Mode" submenu; applied to the next
+    /// tray-initiated activation. Independent of `mode` (which is set only
+    /// while an assertion is live).
+    selected_mode: AssertionType,
 }
 
 pub struct AppState {
     inner: Mutex<InnerState>,
 }
 
-impl Default for AppState {
-    fn default() -> Self {
+impl AppState {
+    pub fn with_selected_mode(mode: AssertionType) -> Self {
         Self {
             inner: Mutex::new(InnerState {
                 assertion_id: 0,
@@ -42,8 +46,15 @@ impl Default for AppState {
                 start_time: None,
                 duration: None,
                 lid_close_active: false,
+                selected_mode: mode,
             }),
         }
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::with_selected_mode(AssertionType::NoIdleSleep)
     }
 }
 
@@ -76,6 +87,14 @@ impl AppState {
             remaining_seconds,
             total_seconds,
         }
+    }
+
+    pub fn selected_mode(&self) -> AssertionType {
+        self.inner.lock().unwrap().selected_mode
+    }
+
+    pub fn set_selected_mode(&self, mode: AssertionType) {
+        self.inner.lock().unwrap().selected_mode = mode;
     }
 
     pub fn set_active(&self, id: u32, mode: AssertionType, duration_secs: Option<u64>) {

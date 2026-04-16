@@ -1,5 +1,8 @@
 mod commands;
+#[cfg(target_os = "macos")]
+mod macos_window;
 mod power;
+mod settings;
 mod state;
 
 use power::AssertionType;
@@ -8,9 +11,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    AppHandle, Manager,
 };
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_positioner::{Position, WindowExt};
@@ -37,7 +40,7 @@ fn format_tray_time(seconds: u64) -> String {
     }
 }
 
-fn set_tray_icon(app: &tauri::AppHandle, active: bool) {
+fn set_tray_icon(app: &AppHandle, active: bool) {
     if let Some(tray) = app.tray_by_id("main") {
         let bytes = if active { ICON_ACTIVE } else { ICON_INACTIVE };
         if let Ok(img) = Image::from_bytes(bytes) {
@@ -47,20 +50,99 @@ fn set_tray_icon(app: &tauri::AppHandle, active: bool) {
     }
 }
 
+/// Menu-ID ↔ AssertionType mapping for the "Mode" submenu.
+const MODE_MENU: [(&str, AssertionType); 5] = [
+    ("mode_idle", AssertionType::NoIdleSleep),
+    ("mode_display", AssertionType::NoDisplaySleep),
+    ("mode_server", AssertionType::ServerMode),
+    ("mode_network", AssertionType::NetworkActive),
+    ("mode_background", AssertionType::BackgroundTask),
+];
+
+fn mode_from_menu_id(id: &str) -> Option<AssertionType> {
+    MODE_MENU.iter().find(|(i, _)| *i == id).map(|(_, m)| *m)
+}
+
+/// Clones of the Mode submenu's check items, stashed in Tauri-managed state
+/// so the menu handler can toggle radio marks without re-traversing the menu
+/// tree (TrayIcon has no `menu()` getter in Tauri v2, and menu items are
+/// cheap Arc-backed handles so cloning is fine).
+struct ModeCheckItems {
+    items: Vec<(AssertionType, CheckMenuItem<tauri::Wry>)>,
+}
+
+/// Set radio-style check marks on the Mode submenu so only `selected` is ticked.
+fn update_mode_check_states(app: &AppHandle, selected: AssertionType) {
+    let Some(handles) = app.try_state::<ModeCheckItems>() else { return };
+    for (mode, item) in &handles.items {
+        let _ = item.set_checked(*mode == selected);
+    }
+}
+
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    // Right-click menu with quick-start presets
+    // Read the current sticky mode (already populated from settings by setup()).
+    let selected = app
+        .try_state::<AppState>()
+        .map(|s| s.selected_mode())
+        .unwrap_or(AssertionType::NoIdleSleep);
+
+    // Mode submenu — radio-style check items, one pre-checked from persisted settings.
+    let mode_idle = CheckMenuItem::with_id(
+        app, "mode_idle", "Idle", true,
+        selected == AssertionType::NoIdleSleep, None::<&str>,
+    )?;
+    let mode_display = CheckMenuItem::with_id(
+        app, "mode_display", "Display", true,
+        selected == AssertionType::NoDisplaySleep, None::<&str>,
+    )?;
+    let mode_server = CheckMenuItem::with_id(
+        app, "mode_server", "Server Mode", true,
+        selected == AssertionType::ServerMode, None::<&str>,
+    )?;
+    let mode_network = CheckMenuItem::with_id(
+        app, "mode_network", "Network", true,
+        selected == AssertionType::NetworkActive, None::<&str>,
+    )?;
+    let mode_background = CheckMenuItem::with_id(
+        app, "mode_background", "Background", true,
+        selected == AssertionType::BackgroundTask, None::<&str>,
+    )?;
+    let mode_submenu = Submenu::with_id_and_items(
+        app, "mode", "Mode", true,
+        &[&mode_idle, &mode_display, &mode_server, &mode_network, &mode_background],
+    )?;
+
+    // Stash the check items so the menu handler can flip radio marks later.
+    app.manage(ModeCheckItems {
+        items: vec![
+            (AssertionType::NoIdleSleep, mode_idle.clone()),
+            (AssertionType::NoDisplaySleep, mode_display.clone()),
+            (AssertionType::ServerMode, mode_server.clone()),
+            (AssertionType::NetworkActive, mode_network.clone()),
+            (AssertionType::BackgroundTask, mode_background.clone()),
+        ],
+    });
+
+    // Duration submenu (now includes 4h, matching the webview's preset set).
     let start_30m = MenuItem::with_id(app, "start_30m", "30 Minutes", true, None::<&str>)?;
     let start_1h = MenuItem::with_id(app, "start_1h", "1 Hour", true, None::<&str>)?;
     let start_2h = MenuItem::with_id(app, "start_2h", "2 Hours", true, None::<&str>)?;
+    let start_4h = MenuItem::with_id(app, "start_4h", "4 Hours", true, None::<&str>)?;
     let start_indef = MenuItem::with_id(app, "start_indef", "Indefinite", true, None::<&str>)?;
+    let start_submenu = Submenu::with_id_and_items(
+        app, "start", "Start for", true,
+        &[&start_30m, &start_1h, &start_2h, &start_4h, &start_indef],
+    )?;
+
     let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Caffeinator", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Caffeinator", true, None::<&str>)?;
+    let sep3 = PredefinedMenuItem::separator(app)?;
 
     let menu = Menu::with_items(
         app,
-        &[&start_30m, &start_1h, &start_2h, &start_indef, &sep1, &stop, &sep2, &quit],
+        &[&mode_submenu, &sep1, &start_submenu, &sep2, &stop, &sep3, &quit],
     )?;
 
     let tray = TrayIconBuilder::with_id("main")
@@ -86,34 +168,62 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                         set_tray_icon(app, false);
                     }
                 }
-                "start_30m" | "start_1h" | "start_2h" | "start_indef" => {
+                "start_30m" | "start_1h" | "start_2h" | "start_4h" | "start_indef" => {
                     let duration_secs: Option<u64> = match id {
                         "start_30m" => Some(30 * 60),
                         "start_1h" => Some(60 * 60),
                         "start_2h" => Some(2 * 60 * 60),
+                        "start_4h" => Some(4 * 60 * 60),
                         _ => None,
                     };
                     if let Some(state) = app.try_state::<AppState>() {
-                        // Deactivate existing first
                         let _ = state.deactivate_if_active();
-                        // Activate with default Idle mode
-                        let mode = AssertionType::NoIdleSleep;
+                        let mode = state.selected_mode();
+
+                        // Mirror the IPC `activate` command's flow: if the mode needs
+                        // lid-close prevention, prompt for admin before creating the
+                        // IOKit assertion. Early-return (skip activation) if declined.
+                        if mode.needs_lid_close_prevention() {
+                            if let Err(e) = power::enable_lid_close_prevention() {
+                                eprintln!("[caffeinator] lid-close prevention failed: {}", e);
+                                return;
+                            }
+                        }
+
                         let reason = format!("Caffeinator: Preventing {} sleep", mode.display_name());
-                        if let Ok(assertion_id) = power::create_assertion(mode, &reason) {
-                            state.set_active(assertion_id, mode, duration_secs);
-                            set_tray_icon(app, true);
-                            // Set initial tray title immediately
-                            if let Some(tray) = app.tray_by_id("main") {
-                                let title = match duration_secs {
-                                    Some(secs) => format_tray_time(secs),
-                                    None => "∞".to_string(),
-                                };
-                                let _ = tray.set_title(Some(&title));
+                        match power::create_assertion(mode, &reason) {
+                            Ok(assertion_id) => {
+                                state.set_active(assertion_id, mode, duration_secs);
+                                set_tray_icon(app, true);
+                                if let Some(tray) = app.tray_by_id("main") {
+                                    let title = match duration_secs {
+                                        Some(secs) => format_tray_time(secs),
+                                        None => "∞".to_string(),
+                                    };
+                                    let _ = tray.set_title(Some(&title));
+                                }
+                            }
+                            Err(_) => {
+                                // Rollback lid-close if the assertion failed after we enabled it.
+                                if mode.needs_lid_close_prevention() {
+                                    power::disable_lid_close_prevention();
+                                }
                             }
                         }
                     }
                 }
-                _ => {}
+                other => {
+                    // Mode radio-selection: update state, re-draw check marks, persist.
+                    if let Some(mode) = mode_from_menu_id(other) {
+                        if let Some(state) = app.try_state::<AppState>() {
+                            state.set_selected_mode(mode);
+                        }
+                        update_mode_check_states(app, mode);
+                        if let Err(e) = settings::save(&settings::Settings { selected_mode: mode }) {
+                            eprintln!("[caffeinator] settings save failed: {}", e);
+                        }
+                    }
+                }
             }
         })
         .on_tray_icon_event(|tray, event| {
@@ -136,6 +246,8 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         let _ = window.as_ref().window().move_window(Position::TrayCenter);
                         let _ = window.show();
+                        #[cfg(target_os = "macos")]
+                        macos_window::set_fullscreen_overlay_behavior(&window);
                         let _ = window.set_focus();
                     }
                 }
@@ -176,6 +288,12 @@ pub fn run() {
             commands::set_autostart_enabled,
         ])
         .setup(|app| {
+            // Apply persisted sticky mode before the tray builds its radio items.
+            let persisted = settings::load();
+            if let Some(state) = app.try_state::<AppState>() {
+                state.set_selected_mode(persisted.selected_mode);
+            }
+
             setup_tray(app)?;
 
             #[cfg(target_os = "macos")]

@@ -114,8 +114,19 @@ export function PowerProfileButton() {
                       <Moon size={12} />
                       <span>System</span>
                     </div>
-                    <div className="text-white text-right">
-                      {formatSleepTime(profile.system_sleep)}
+                    <div className="text-right">
+                      {profile.system_sleep_prevented_by.length > 0 ? (
+                        <span
+                          className="text-amber-400"
+                          title={`Prevented by: ${profile.system_sleep_prevented_by.join(", ")}`}
+                        >
+                          Overridden
+                        </span>
+                      ) : (
+                        <span className="text-white">
+                          {formatSleepTime(profile.system_sleep)}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

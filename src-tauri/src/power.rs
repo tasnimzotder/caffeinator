@@ -19,7 +19,10 @@ const K_IOPM_ASSERTION_LEVEL_ON: u32 = 255;
 pub enum AssertionType {
     NoIdleSleep,
     NoDisplaySleep,
-    LidClose,
+    /// "Server Mode" in the UI — keeps the system awake 24/7 and survives lid
+    /// closure via pmset. Enum variant name matches user-facing label.
+    #[serde(alias = "LidClose")] // backwards-compat with old settings.json
+    ServerMode,
     NetworkActive,
     BackgroundTask,
 }
@@ -27,8 +30,11 @@ pub enum AssertionType {
 impl AssertionType {
     fn as_cfstring(&self) -> CFString {
         let s = match self {
-            AssertionType::NoIdleSleep => "PreventUserIdleSystemSleep",
-            AssertionType::NoDisplaySleep | AssertionType::LidClose => "PreventUserIdleDisplaySleep",
+            // ServerMode keeps the CPU awake via PreventUserIdleSystemSleep; display
+            // sleep and screen lock follow normal macOS timers. Surviving lid closure
+            // is handled separately by `enable_lid_close_prevention` (pmset).
+            AssertionType::NoIdleSleep | AssertionType::ServerMode => "PreventUserIdleSystemSleep",
+            AssertionType::NoDisplaySleep => "PreventUserIdleDisplaySleep",
             AssertionType::NetworkActive => "NetworkClientActive",
             AssertionType::BackgroundTask => "BackgroundTask",
         };
@@ -39,14 +45,17 @@ impl AssertionType {
         match self {
             AssertionType::NoIdleSleep => "Idle",
             AssertionType::NoDisplaySleep => "Display",
-            AssertionType::LidClose => "Lid Close",
+            AssertionType::ServerMode => "Server Mode",
             AssertionType::NetworkActive => "Network",
             AssertionType::BackgroundTask => "Background",
         }
     }
 
+    /// Whether activating this mode additionally requires `pmset -b disablesleep 1`
+    /// (to survive lid closure / battery-mode sleep on power cuts). Currently only
+    /// ServerMode needs this.
     pub fn needs_lid_close_prevention(&self) -> bool {
-        matches!(self, AssertionType::LidClose)
+        matches!(self, AssertionType::ServerMode)
     }
 }
 
@@ -123,40 +132,50 @@ pub struct PowerProfile {
     pub display_sleep: Option<u32>,
     pub disk_sleep: Option<u32>,
     pub system_sleep: Option<u32>,
+    /// Process names currently preventing system sleep (parsed from pmset's
+    /// "(sleep prevented by X, Y)" parenthetical). When non-empty, the
+    /// `system_sleep` timer is being overridden at runtime.
+    pub system_sleep_prevented_by: Vec<String>,
     pub assertions: Vec<String>,
 }
 
 pub fn get_power_profile() -> Result<PowerProfile, String> {
     use std::process::Command;
 
-    // Get current power settings
+    // Current power settings (sleep timers, "prevented by" info).
+    // NB: `pmset -g` does NOT include "AC Power"/"Battery Power" strings — that
+    // info lives only in `pmset -g ps`, which we query separately below.
     let pmset_output = Command::new("pmset")
         .arg("-g")
         .output()
         .map_err(|e| format!("Failed to run pmset: {}", e))?;
-
     let pmset_str = String::from_utf8_lossy(&pmset_output.stdout);
 
-    // Parse power source
-    let source = if pmset_str.contains("AC Power") {
+    // Current power source.
+    let ps_output = Command::new("pmset")
+        .args(["-g", "ps"])
+        .output()
+        .map_err(|e| format!("Failed to run pmset -g ps: {}", e))?;
+    let ps_str = String::from_utf8_lossy(&ps_output.stdout);
+    let source = if ps_str.contains("AC Power") {
         "AC Power".to_string()
-    } else if pmset_str.contains("Battery Power") {
+    } else if ps_str.contains("Battery Power") {
         "Battery".to_string()
     } else {
         "Unknown".to_string()
     };
 
-    // Parse sleep values
+    // Parse sleep timer values (raw pmset config; may be overridden at runtime).
     let display_sleep = parse_pmset_value(&pmset_str, "displaysleep");
     let disk_sleep = parse_pmset_value(&pmset_str, "disksleep");
     let system_sleep = parse_pmset_value(&pmset_str, "sleep");
+    let system_sleep_prevented_by = parse_sleep_prevented_by(&pmset_str);
 
     // Get active assertions
     let assertions_output = Command::new("pmset")
         .args(["-g", "assertions"])
         .output()
         .map_err(|e| format!("Failed to run pmset assertions: {}", e))?;
-
     let assertions_str = String::from_utf8_lossy(&assertions_output.stdout);
     let assertions = parse_assertions(&assertions_str);
 
@@ -165,8 +184,31 @@ pub fn get_power_profile() -> Result<PowerProfile, String> {
         display_sleep,
         disk_sleep,
         system_sleep,
+        system_sleep_prevented_by,
         assertions,
     })
+}
+
+/// Parse the "(sleep prevented by X, Y, Z)" parenthetical from the `sleep` line.
+/// Returns empty vec if no override is active.
+fn parse_sleep_prevented_by(output: &str) -> Vec<String> {
+    const MARKER: &str = "(sleep prevented by ";
+    for line in output.lines() {
+        let trimmed = line.trim();
+        // Guard against matching unrelated keys like "sleepDisabled"
+        if !(trimmed.starts_with("sleep ") || trimmed.starts_with("sleep\t")) {
+            continue;
+        }
+        let Some(start) = trimmed.find(MARKER) else { continue };
+        let after = &trimmed[start + MARKER.len()..];
+        let Some(end) = after.find(')') else { continue };
+        return after[..end]
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    Vec::new()
 }
 
 fn parse_pmset_value(output: &str, key: &str) -> Option<u32> {

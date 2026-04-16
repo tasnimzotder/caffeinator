@@ -15,7 +15,7 @@ pub fn activate(
     // Deactivate any existing assertion first
     state.deactivate_if_active()?;
 
-    // For LidClose mode, enable pmset disablesleep first (prompts for admin)
+    // For ServerMode, enable pmset disablesleep first (prompts for admin)
     if mode.needs_lid_close_prevention() {
         power::enable_lid_close_prevention()?;
     }

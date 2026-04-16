@@ -1,6 +1,6 @@
-import { Moon, Monitor, Laptop, Wifi, Cog, type LucideIcon } from "lucide-react";
+import { Moon, Monitor, Server, Wifi, Cog, type LucideIcon } from "lucide-react";
 
-export type AssertionType = "NoIdleSleep" | "NoDisplaySleep" | "LidClose" | "NetworkActive" | "BackgroundTask";
+export type AssertionType = "NoIdleSleep" | "NoDisplaySleep" | "ServerMode" | "NetworkActive" | "BackgroundTask";
 
 export interface CaffeinateStatus {
   is_active: boolean;
@@ -14,6 +14,8 @@ export interface PowerProfile {
   display_sleep: number | null;
   disk_sleep: number | null;
   system_sleep: number | null;
+  /** Process names preventing system sleep; when non-empty, the timer is overridden. */
+  system_sleep_prevented_by: string[];
   assertions: string[];
 }
 
@@ -35,7 +37,7 @@ export interface ModeInfo {
 export const MODE_INFO: Record<AssertionType, ModeInfo> = {
   NoIdleSleep: { label: "Idle", icon: Moon, description: "Prevents idle system sleep. Display may still dim or turn off.", activeLabel: "Preventing idle sleep" },
   NoDisplaySleep: { label: "Display", icon: Monitor, description: "Keeps display on and prevents idle sleep.", activeLabel: "Keeping display on" },
-  LidClose: { label: "Lid Close", icon: Laptop, description: "Prevents sleep even with lid closed. Requires admin password. Use with caution.", activeLabel: "Lid close prevented" },
+  ServerMode: { label: "Server Mode", icon: Server, description: "Keeps the system awake 24/7 (survives lid close and power cuts). Display sleep and screen lock follow normal timers. Requires admin password.", activeLabel: "Server mode active" },
   NetworkActive: { label: "Network", icon: Wifi, description: "Keeps system awake while serving network clients (file sharing, etc.).", activeLabel: "Serving network clients" },
   BackgroundTask: { label: "Background", icon: Cog, description: "Keeps process running for background work. System may enter low power.", activeLabel: "Running background task" },
 };

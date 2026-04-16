@@ -10,7 +10,7 @@ interface ModeSelectProps {
 const MODES: AssertionType[] = [
   "NoIdleSleep",
   "NoDisplaySleep",
-  "LidClose",
+  "ServerMode",
   "NetworkActive",
   "BackgroundTask",
 ];
