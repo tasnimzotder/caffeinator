@@ -362,11 +362,12 @@ dependencies = [
 
 [[package]]
 name = "caffeinator"
-version = "0.1.0"
+version = "0.1.2-alpha"
 dependencies = [
  "core-foundation",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
+ "plist",
  "serde",
  "serde_json",
  "tauri",
@@ -374,6 +375,7 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-opener",
  "tauri-plugin-positioner",
+ "tauri-plugin-single-instance",
  "tokio",
 ]
 
@@ -4002,6 +4004,22 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cd0cb5c412a5071b69bab6a6df1583cbb89460d4a83b6a24769b08d15b6b1e1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zbus",
 ]
 
 [[package]]

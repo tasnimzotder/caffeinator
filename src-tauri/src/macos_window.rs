@@ -24,7 +24,9 @@ use tauri::{Runtime, WebviewWindow};
 /// Idempotent — safe to call on every window show.
 pub fn set_fullscreen_overlay_behavior<R: Runtime>(window: &WebviewWindow<R>) {
     // Tauri hands us a raw pointer to the underlying NSWindow.
-    let Ok(ns_window_ptr) = window.ns_window() else { return };
+    let Ok(ns_window_ptr) = window.ns_window() else {
+        return;
+    };
     if ns_window_ptr.is_null() {
         return;
     }

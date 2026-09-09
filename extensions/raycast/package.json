@@ -1,0 +1,85 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "caffeinator",
+  "title": "Caffeinator",
+  "description": "Keep your Mac awake with Caffeinator. Start a session, toggle your saved defaults, and check live status.",
+  "icon": "icon.png",
+  "author": "tasnimzotder",
+  "license": "MIT",
+  "categories": [
+    "Productivity",
+    "System"
+  ],
+  "platforms": [
+    "macOS"
+  ],
+  "commands": [
+    {
+      "name": "start-session",
+      "title": "Start Session",
+      "subtitle": "Caffeinator",
+      "description": "Choose a keep-awake mode and duration",
+      "mode": "view"
+    },
+    {
+      "name": "toggle",
+      "title": "Toggle Keep Awake",
+      "subtitle": "Caffeinator",
+      "description": "Start your saved session or stop and restore sleep",
+      "mode": "no-view"
+    },
+    {
+      "name": "stop",
+      "title": "Stop Session",
+      "subtitle": "Caffeinator",
+      "description": "End the current session and restore sleep settings",
+      "mode": "no-view"
+    },
+    {
+      "name": "status",
+      "title": "Session Status",
+      "subtitle": "Caffeinator",
+      "description": "See the active mode, remaining time, and recovery state",
+      "mode": "view"
+    },
+    {
+      "name": "open-app",
+      "title": "Open Caffeinator",
+      "description": "Show the Caffeinator window",
+      "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "launchAutomatically",
+      "title": "Launch Automatically",
+      "description": "Launch Caffeinator in the background when it is not running",
+      "type": "checkbox",
+      "label": "Launch Caffeinator automatically",
+      "default": true,
+      "required": false
+    },
+    {
+      "name": "appPath",
+      "title": "Application Path",
+      "description": "Path to Caffeinator.app. Change this when testing a development build.",
+      "type": "textfield",
+      "default": "/Applications/Caffeinator.app",
+      "required": true
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "~5.8.3"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  }
+}

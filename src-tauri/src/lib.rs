@@ -1,24 +1,50 @@
 mod commands;
+mod control;
 #[cfg(target_os = "macos")]
 mod macos_window;
 mod power;
 mod settings;
 mod state;
+mod telemetry;
 
-use power::AssertionType;
+use commands::STATUS_EVENT;
 use state::AppState;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     image::Image,
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager,
+    AppHandle, Emitter, Manager, PhysicalPosition,
 };
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_positioner::{Position, WindowExt};
 
 static LAST_FOCUS_LOST_MS: AtomicI64 = AtomicI64::new(0);
+static QUIT_ALLOWED: AtomicBool = AtomicBool::new(false);
+static TRAY_POSITION_KNOWN: AtomicBool = AtomicBool::new(false);
+
+fn show_main(app: &AppHandle) {
+    let dispatcher = app.clone();
+    let app = app.clone();
+    // NSWindow collection behavior must be changed on the AppKit main thread.
+    // This helper is also called by worker threads and the Raycast socket.
+    let _ = dispatcher.run_on_main_thread(move || {
+        if let Some(window) = app.get_webview_window("main") {
+            // Positioner panics for TrayCenter until it receives a tray event.
+            // Raycast and recovery can open the window before the first click.
+            let position = if TRAY_POSITION_KNOWN.load(Ordering::SeqCst) {
+                Position::TrayCenter
+            } else {
+                Position::TopRight
+            };
+            let _ = window.as_ref().window().move_window(position);
+            let _ = window.show();
+            #[cfg(target_os = "macos")]
+            macos_window::set_fullscreen_overlay_behavior(&window);
+            let _ = window.set_focus();
+        }
+    });
+}
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -50,192 +76,23 @@ fn set_tray_icon(app: &AppHandle, active: bool) {
     }
 }
 
-/// Menu-ID ↔ AssertionType mapping for the "Mode" submenu.
-const MODE_MENU: [(&str, AssertionType); 5] = [
-    ("mode_idle", AssertionType::NoIdleSleep),
-    ("mode_display", AssertionType::NoDisplaySleep),
-    ("mode_server", AssertionType::ServerMode),
-    ("mode_network", AssertionType::NetworkActive),
-    ("mode_background", AssertionType::BackgroundTask),
-];
-
-fn mode_from_menu_id(id: &str) -> Option<AssertionType> {
-    MODE_MENU.iter().find(|(i, _)| *i == id).map(|(_, m)| *m)
-}
-
-/// Clones of the Mode submenu's check items, stashed in Tauri-managed state
-/// so the menu handler can toggle radio marks without re-traversing the menu
-/// tree (TrayIcon has no `menu()` getter in Tauri v2, and menu items are
-/// cheap Arc-backed handles so cloning is fine).
-struct ModeCheckItems {
-    items: Vec<(AssertionType, CheckMenuItem<tauri::Wry>)>,
-}
-
-/// Set radio-style check marks on the Mode submenu so only `selected` is ticked.
-fn update_mode_check_states(app: &AppHandle, selected: AssertionType) {
-    let Some(handles) = app.try_state::<ModeCheckItems>() else { return };
-    for (mode, item) in &handles.items {
-        let _ = item.set_checked(*mode == selected);
-    }
-}
-
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    // Read the current sticky mode (already populated from settings by setup()).
-    let selected = app
-        .try_state::<AppState>()
-        .map(|s| s.selected_mode())
-        .unwrap_or(AssertionType::NoIdleSleep);
-
-    // Mode submenu — radio-style check items, one pre-checked from persisted settings.
-    let mode_idle = CheckMenuItem::with_id(
-        app, "mode_idle", "Idle", true,
-        selected == AssertionType::NoIdleSleep, None::<&str>,
-    )?;
-    let mode_display = CheckMenuItem::with_id(
-        app, "mode_display", "Display", true,
-        selected == AssertionType::NoDisplaySleep, None::<&str>,
-    )?;
-    let mode_server = CheckMenuItem::with_id(
-        app, "mode_server", "Server Mode", true,
-        selected == AssertionType::ServerMode, None::<&str>,
-    )?;
-    let mode_network = CheckMenuItem::with_id(
-        app, "mode_network", "Network", true,
-        selected == AssertionType::NetworkActive, None::<&str>,
-    )?;
-    let mode_background = CheckMenuItem::with_id(
-        app, "mode_background", "Background", true,
-        selected == AssertionType::BackgroundTask, None::<&str>,
-    )?;
-    let mode_submenu = Submenu::with_id_and_items(
-        app, "mode", "Mode", true,
-        &[&mode_idle, &mode_display, &mode_server, &mode_network, &mode_background],
-    )?;
-
-    // Stash the check items so the menu handler can flip radio marks later.
-    app.manage(ModeCheckItems {
-        items: vec![
-            (AssertionType::NoIdleSleep, mode_idle.clone()),
-            (AssertionType::NoDisplaySleep, mode_display.clone()),
-            (AssertionType::ServerMode, mode_server.clone()),
-            (AssertionType::NetworkActive, mode_network.clone()),
-            (AssertionType::BackgroundTask, mode_background.clone()),
-        ],
-    });
-
-    // Duration submenu (now includes 4h, matching the webview's preset set).
-    let start_30m = MenuItem::with_id(app, "start_30m", "30 Minutes", true, None::<&str>)?;
-    let start_1h = MenuItem::with_id(app, "start_1h", "1 Hour", true, None::<&str>)?;
-    let start_2h = MenuItem::with_id(app, "start_2h", "2 Hours", true, None::<&str>)?;
-    let start_4h = MenuItem::with_id(app, "start_4h", "4 Hours", true, None::<&str>)?;
-    let start_indef = MenuItem::with_id(app, "start_indef", "Indefinite", true, None::<&str>)?;
-    let start_submenu = Submenu::with_id_and_items(
-        app, "start", "Start for", true,
-        &[&start_30m, &start_1h, &start_2h, &start_4h, &start_indef],
-    )?;
-
-    let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Caffeinator", true, None::<&str>)?;
-    let sep1 = PredefinedMenuItem::separator(app)?;
-    let sep2 = PredefinedMenuItem::separator(app)?;
-    let sep3 = PredefinedMenuItem::separator(app)?;
-
-    let menu = Menu::with_items(
-        app,
-        &[&mode_submenu, &sep1, &start_submenu, &sep2, &stop, &sep3, &quit],
-    )?;
-
     let tray = TrayIconBuilder::with_id("main")
         .icon(Image::from_bytes(ICON_INACTIVE)?)
         .icon_as_template(true)
-        .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| {
-            let id = event.id.as_ref();
-            match id {
-                "quit" => {
-                    if let Some(state) = app.try_state::<AppState>() {
-                        let _ = state.deactivate_if_active();
-                    }
-                    app.exit(0);
-                }
-                "stop" => {
-                    if let Some(state) = app.try_state::<AppState>() {
-                        let _ = state.deactivate_if_active();
-                        if let Some(tray) = app.tray_by_id("main") {
-                            let _ = tray.set_title(Some(""));
-                        }
-                        set_tray_icon(app, false);
-                    }
-                }
-                "start_30m" | "start_1h" | "start_2h" | "start_4h" | "start_indef" => {
-                    let duration_secs: Option<u64> = match id {
-                        "start_30m" => Some(30 * 60),
-                        "start_1h" => Some(60 * 60),
-                        "start_2h" => Some(2 * 60 * 60),
-                        "start_4h" => Some(4 * 60 * 60),
-                        _ => None,
-                    };
-                    if let Some(state) = app.try_state::<AppState>() {
-                        let _ = state.deactivate_if_active();
-                        let mode = state.selected_mode();
-
-                        // Mirror the IPC `activate` command's flow: if the mode needs
-                        // lid-close prevention, prompt for admin before creating the
-                        // IOKit assertion. Early-return (skip activation) if declined.
-                        if mode.needs_lid_close_prevention() {
-                            if let Err(e) = power::enable_lid_close_prevention() {
-                                eprintln!("[caffeinator] lid-close prevention failed: {}", e);
-                                return;
-                            }
-                        }
-
-                        let reason = format!("Caffeinator: Preventing {} sleep", mode.display_name());
-                        match power::create_assertion(mode, &reason) {
-                            Ok(assertion_id) => {
-                                state.set_active(assertion_id, mode, duration_secs);
-                                set_tray_icon(app, true);
-                                if let Some(tray) = app.tray_by_id("main") {
-                                    let title = match duration_secs {
-                                        Some(secs) => format_tray_time(secs),
-                                        None => "∞".to_string(),
-                                    };
-                                    let _ = tray.set_title(Some(&title));
-                                }
-                            }
-                            Err(_) => {
-                                // Rollback lid-close if the assertion failed after we enabled it.
-                                if mode.needs_lid_close_prevention() {
-                                    power::disable_lid_close_prevention();
-                                }
-                            }
-                        }
-                    }
-                }
-                other => {
-                    // Mode radio-selection: update state, re-draw check marks, persist.
-                    if let Some(mode) = mode_from_menu_id(other) {
-                        if let Some(state) = app.try_state::<AppState>() {
-                            state.set_selected_mode(mode);
-                        }
-                        update_mode_check_states(app, mode);
-                        if let Err(e) = settings::save(&settings::Settings { selected_mode: mode }) {
-                            eprintln!("[caffeinator] settings save failed: {}", e);
-                        }
-                    }
-                }
-            }
-        })
         .on_tray_icon_event(|tray, event| {
             tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
 
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
+                rect,
                 ..
             } = event
             {
                 let app = tray.app_handle();
+                TRAY_POSITION_KNOWN.store(true, Ordering::SeqCst);
                 if let Some(window) = app.get_webview_window("main") {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
@@ -244,7 +101,53 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                         if elapsed < 300 {
                             return;
                         }
-                        let _ = window.as_ref().window().move_window(Position::TrayCenter);
+
+                        // Positioner::TrayCenter falls back to the tray item's
+                        // top edge on macOS, which overlaps the menu bar. Use
+                        // the click's physical tray rect so the panel sits just
+                        // below the item and remains on the clicked display.
+                        if let Ok(window_size) = window.outer_size() {
+                            let scale = window.scale_factor().unwrap_or(1.0);
+                            let tray_position = rect.position.to_physical::<f64>(1.0);
+                            let tray_size = rect.size.to_physical::<f64>(1.0);
+                            let gap = 6.0 * scale;
+                            let edge = 10.0 * scale;
+                            let tray_center = tray_position.x + tray_size.width / 2.0;
+                            let mut x = tray_center - f64::from(window_size.width) / 2.0;
+                            let mut y = tray_position.y + tray_size.height + gap;
+
+                            if let Ok(monitors) = window.available_monitors() {
+                                if let Some(monitor) = monitors.iter().find(|monitor| {
+                                    let origin = monitor.position();
+                                    let size = monitor.size();
+                                    tray_center >= f64::from(origin.x)
+                                        && tray_center < f64::from(origin.x) + f64::from(size.width)
+                                        && tray_position.y >= f64::from(origin.y)
+                                        && tray_position.y
+                                            < f64::from(origin.y) + f64::from(size.height)
+                                }) {
+                                    let origin = monitor.position();
+                                    let size = monitor.size();
+                                    let min_x = f64::from(origin.x) + edge;
+                                    let max_x = f64::from(origin.x) + f64::from(size.width)
+                                        - f64::from(window_size.width)
+                                        - edge;
+                                    let min_y = f64::from(origin.y) + tray_size.height + gap;
+                                    let max_y = f64::from(origin.y) + f64::from(size.height)
+                                        - f64::from(window_size.height)
+                                        - edge;
+                                    x = x.clamp(min_x, max_x.max(min_x));
+                                    y = y.clamp(min_y, max_y.max(min_y));
+                                }
+                            }
+
+                            let _ = window.set_position(PhysicalPosition::new(
+                                x.round() as i32,
+                                y.round() as i32,
+                            ));
+                        } else {
+                            let _ = window.as_ref().window().move_window(Position::TrayCenter);
+                        }
                         let _ = window.show();
                         #[cfg(target_os = "macos")]
                         macos_window::set_fullscreen_overlay_behavior(&window);
@@ -262,6 +165,9 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            show_main(app)
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_autostart::init(
@@ -279,21 +185,17 @@ pub fn run() {
             commands::activate,
             commands::deactivate,
             commands::get_status,
-            commands::toggle,
-            commands::update_tray_title,
-            commands::set_tray_active,
+            commands::set_selected_mode,
+            commands::set_selected_duration,
+            commands::hide_window,
             commands::get_power_profile,
+            commands::get_power_telemetry,
             commands::quit_app,
             commands::get_autostart_enabled,
             commands::set_autostart_enabled,
         ])
         .setup(|app| {
-            // Apply persisted sticky mode before the tray builds its radio items.
-            let persisted = settings::load();
-            if let Some(state) = app.try_state::<AppState>() {
-                state.set_selected_mode(persisted.selected_mode);
-            }
-
+            control::start(app.handle())?;
             setup_tray(app)?;
 
             #[cfg(target_os = "macos")]
@@ -301,47 +203,77 @@ pub fn run() {
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
 
-            // Background timer: updates tray title every second, independent of webview
+            // The one-second event stream is independent of tray text changes.
+            // Privileged expiry work runs separately so status remains readable.
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut prev_title = String::new();
+                let mut prev_active = false;
+                let expiry_running = std::sync::Arc::new(AtomicBool::new(false));
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
-                    if let Some(state) = app_handle.try_state::<AppState>() {
-                        let status = state.get_status();
-
-                        // Auto-deactivate when timer expires
-                        if status.is_active && status.remaining_seconds == Some(0) {
-                            let _ = state.deactivate_if_active();
-                            if let Some(tray) = app_handle.tray_by_id("main") {
-                                let _ = tray.set_title(Some(""));
+                    let state = app_handle.state::<AppState>();
+                    let status = state.get_status();
+                    if !status.busy
+                        && status.error.is_none()
+                        && status.remaining_seconds == Some(0)
+                        && !expiry_running.swap(true, Ordering::SeqCst)
+                    {
+                        let app = app_handle.clone();
+                        let running = expiry_running.clone();
+                        std::thread::spawn(move || {
+                            let state = app.state::<AppState>();
+                            state.expire_if_due();
+                            let status = state.get_status();
+                            let _ = app.emit(STATUS_EVENT, &status);
+                            if status.error.is_some() {
+                                show_main(&app);
                             }
-                            set_tray_icon(&app_handle, false);
-                            prev_title.clear();
-                            continue;
-                        }
-
-                        let title = if status.is_active {
-                            match status.remaining_seconds {
-                                Some(secs) => format_tray_time(secs),
-                                None => "∞".to_string(),
-                            }
-                        } else {
-                            String::new()
-                        };
-
-                        if title != prev_title {
-                            if let Some(tray) = app_handle.tray_by_id("main") {
-                                let _ = tray.set_title(Some(&title));
-                            }
-                            prev_title = title;
-                        }
+                            running.store(false, Ordering::SeqCst);
+                        });
                     }
+                    let title = if status.recovery_required {
+                        "!".to_string()
+                    } else if status.is_active {
+                        status
+                            .remaining_seconds
+                            .map(format_tray_time)
+                            .unwrap_or_else(|| "∞".to_string())
+                    } else {
+                        String::new()
+                    };
+                    if status.is_active != prev_active {
+                        set_tray_icon(&app_handle, status.is_active);
+                        prev_active = status.is_active;
+                    }
+                    if title != prev_title {
+                        if let Some(tray) = app_handle.tray_by_id("main") {
+                            let _ = tray.set_title(Some(&title));
+                        }
+                        prev_title = title;
+                    }
+                    let _ = app_handle.emit(STATUS_EVENT, &status);
                 }
             });
+            if app.state::<AppState>().get_status().recovery_required {
+                show_main(app.handle());
+            }
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if !QUIT_ALLOWED.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if commands::quit_app(app.clone()).await.is_err() {
+                            show_main(&app);
+                        }
+                    });
+                }
+            }
+        });
 }

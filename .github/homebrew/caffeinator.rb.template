@@ -7,6 +7,9 @@ cask "caffeinator" do
   desc "Minimal macOS menu bar app to keep your Mac awake"
   homepage "https://github.com/tasnimzotder/caffeinator"
 
+  depends_on arch: :arm64
+  depends_on macos: ">= :big_sur"
+
   livecheck do
     url :url
     strategy :github_latest

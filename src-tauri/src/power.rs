@@ -76,7 +76,10 @@ pub fn create_assertion(assertion_type: AssertionType, reason: &str) -> Result<u
     if result == 0 {
         Ok(assertion_id)
     } else {
-        Err(format!("Failed to create power assertion: error code {}", result))
+        Err(format!(
+            "Failed to create power assertion: error code {}",
+            result
+        ))
     }
 }
 
@@ -90,40 +93,130 @@ pub fn release_assertion(assertion_id: u32) -> Result<(), String> {
     if result == 0 {
         Ok(())
     } else {
-        Err(format!("Failed to release power assertion: error code {}", result))
+        Err(format!(
+            "Failed to release power assertion: error code {}",
+            result
+        ))
     }
 }
 
-/// Enable lid-close sleep prevention via `pmset -b disablesleep 1`.
-/// Prompts for admin credentials via macOS authorization dialog.
-pub fn enable_lid_close_prevention() -> Result<(), String> {
-    use std::process::Command;
-    let output = Command::new("osascript")
-        .args([
-            "-e",
-            "do shell script \"pmset -b disablesleep 1; pmset -b sleep 0\" with administrator privileges",
-        ])
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RecoveryRecord {
+    version: u32,
+    sleep_disabled: u32,
+}
+
+fn recovery_path() -> std::path::PathBuf {
+    crate::settings::config_dir().join("power-recovery.json")
+}
+
+fn read_recovery() -> Result<Option<RecoveryRecord>, String> {
+    let raw = match std::fs::read_to_string(recovery_path()) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Cannot read sleep recovery record: {e}")),
+    };
+    let record: RecoveryRecord = serde_json::from_str(&raw)
+        .map_err(|e| format!("Cannot read sleep recovery record: {e}"))?;
+    if record.version != 1 || record.sleep_disabled > 1 {
+        return Err(
+            "Unsupported sleep recovery record. Original settings have been preserved.".into(),
+        );
+    }
+    Ok(Some(record))
+}
+
+pub fn recovery_needed() -> Result<bool, String> {
+    read_recovery().map(|record| record.is_some())
+}
+
+fn pmset(args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("/usr/bin/pmset")
+        .args(args)
         .output()
-        .map_err(|e| format!("Failed to prompt for admin: {}", e))?;
+        .map_err(|e| format!("Cannot read power settings: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Cannot read power settings: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
 
-    if output.status.success() {
-        Ok(())
+fn sleep_disabled() -> Result<u32, String> {
+    parse_pmset_value(&pmset(&["-g"])?, "SleepDisabled")
+        .filter(|value| *value <= 1)
+        .ok_or_else(|| {
+            "macOS did not report its sleep override. Server Mode was not changed.".into()
+        })
+}
+
+fn authorization_error(stderr: &str) -> String {
+    if stderr.trim_end().ends_with("(-128)") {
+        "Authorization canceled. Retry when you are ready.".into()
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Lid-close prevention failed: {}", stderr.trim()))
+        format!("Could not change sleep settings: {}", stderr.trim())
     }
 }
 
-/// Disable lid-close sleep prevention. Best-effort — does not fail the caller.
-pub fn disable_lid_close_prevention() {
-    use std::process::Command;
-    // Try with admin privileges; if user cancels, the setting persists
-    let _ = Command::new("osascript")
-        .args([
-            "-e",
-            "do shell script \"pmset -b disablesleep 0; pmset -b sleep 5\" with administrator privileges",
-        ])
-        .output();
+fn set_sleep_disabled(value: u32) -> Result<(), String> {
+    // Only a validated integer is interpolated; no user text enters the script.
+    let script = format!(
+        "do shell script \"/usr/bin/pmset -a disablesleep {value}\" with administrator privileges"
+    );
+    let output = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .output()
+        .map_err(|e| format!("Cannot request authorization: {e}"))?;
+    if !output.status.success() {
+        return Err(authorization_error(&String::from_utf8_lossy(
+            &output.stderr,
+        )));
+    }
+    if sleep_disabled()? != value {
+        return Err("macOS did not apply the requested sleep setting. Retry restoration.".into());
+    }
+    Ok(())
+}
+
+/// Journal the original global override before changing it. The normal sleep
+/// timers are never modified. A crash leaves a record that can be restored.
+pub fn enable_lid_close_prevention() -> Result<(), String> {
+    if recovery_needed()? {
+        return Err("Restore the previous Server Mode session before starting another.".into());
+    }
+    let original = sleep_disabled()?;
+    let record = RecoveryRecord {
+        version: 1,
+        sleep_disabled: original,
+    };
+    std::fs::create_dir_all(crate::settings::config_dir()).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    crate::settings::atomic_write(&recovery_path(), &json).map_err(|e| e.to_string())?;
+    if original != 1 {
+        if let Err(error) = set_sleep_disabled(1) {
+            // Cancellation normally changes nothing. Clear only after verifying
+            // that the original value still holds; otherwise retain recovery.
+            if sleep_disabled().ok() == Some(original) {
+                let _ = std::fs::remove_file(recovery_path());
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+pub fn disable_lid_close_prevention() -> Result<(), String> {
+    let Some(record) = read_recovery()? else {
+        return Ok(());
+    };
+    if sleep_disabled()? != record.sleep_disabled {
+        set_sleep_disabled(record.sleep_disabled)?;
+    }
+    std::fs::remove_file(recovery_path()).map_err(|e| {
+        format!("Sleep settings restored, but recovery record could not be cleared: {e}")
+    })
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -132,6 +225,7 @@ pub struct PowerProfile {
     pub display_sleep: Option<u32>,
     pub disk_sleep: Option<u32>,
     pub system_sleep: Option<u32>,
+    pub sleep_disabled: bool,
     /// Process names currently preventing system sleep (parsed from pmset's
     /// "(sleep prevented by X, Y)" parenthetical). When non-empty, the
     /// `system_sleep` timer is being overridden at runtime.
@@ -140,30 +234,14 @@ pub struct PowerProfile {
 }
 
 pub fn get_power_profile() -> Result<PowerProfile, String> {
-    use std::process::Command;
-
     // Current power settings (sleep timers, "prevented by" info).
     // NB: `pmset -g` does NOT include "AC Power"/"Battery Power" strings — that
     // info lives only in `pmset -g ps`, which we query separately below.
-    let pmset_output = Command::new("pmset")
-        .arg("-g")
-        .output()
-        .map_err(|e| format!("Failed to run pmset: {}", e))?;
-    let pmset_str = String::from_utf8_lossy(&pmset_output.stdout);
+    let pmset_str = pmset(&["-g"])?;
 
     // Current power source.
-    let ps_output = Command::new("pmset")
-        .args(["-g", "ps"])
-        .output()
-        .map_err(|e| format!("Failed to run pmset -g ps: {}", e))?;
-    let ps_str = String::from_utf8_lossy(&ps_output.stdout);
-    let source = if ps_str.contains("AC Power") {
-        "AC Power".to_string()
-    } else if ps_str.contains("Battery Power") {
-        "Battery".to_string()
-    } else {
-        "Unknown".to_string()
-    };
+    let ps_str = pmset(&["-g", "ps"])?;
+    let source = parse_power_source(&ps_str);
 
     // Parse sleep timer values (raw pmset config; may be overridden at runtime).
     let display_sleep = parse_pmset_value(&pmset_str, "displaysleep");
@@ -172,11 +250,7 @@ pub fn get_power_profile() -> Result<PowerProfile, String> {
     let system_sleep_prevented_by = parse_sleep_prevented_by(&pmset_str);
 
     // Get active assertions
-    let assertions_output = Command::new("pmset")
-        .args(["-g", "assertions"])
-        .output()
-        .map_err(|e| format!("Failed to run pmset assertions: {}", e))?;
-    let assertions_str = String::from_utf8_lossy(&assertions_output.stdout);
+    let assertions_str = pmset(&["-g", "assertions"])?;
     let assertions = parse_assertions(&assertions_str);
 
     Ok(PowerProfile {
@@ -184,9 +258,20 @@ pub fn get_power_profile() -> Result<PowerProfile, String> {
         display_sleep,
         disk_sleep,
         system_sleep,
+        sleep_disabled: parse_pmset_value(&pmset_str, "SleepDisabled") == Some(1),
         system_sleep_prevented_by,
         assertions,
     })
+}
+
+fn parse_power_source(ps_str: &str) -> String {
+    if ps_str.contains("AC Power") {
+        "AC Power".to_string()
+    } else if ps_str.contains("Battery Power") {
+        "Battery".to_string()
+    } else {
+        "Unknown".to_string()
+    }
 }
 
 /// Parse the "(sleep prevented by X, Y, Z)" parenthetical from the `sleep` line.
@@ -199,7 +284,9 @@ fn parse_sleep_prevented_by(output: &str) -> Vec<String> {
         if !(trimmed.starts_with("sleep ") || trimmed.starts_with("sleep\t")) {
             continue;
         }
-        let Some(start) = trimmed.find(MARKER) else { continue };
+        let Some(start) = trimmed.find(MARKER) else {
+            continue;
+        };
         let after = &trimmed[start + MARKER.len()..];
         let Some(end) = after.find(')') else { continue };
         return after[..end]
@@ -214,12 +301,15 @@ fn parse_sleep_prevented_by(output: &str) -> Vec<String> {
 fn parse_pmset_value(output: &str, key: &str) -> Option<u32> {
     for line in output.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with(key) {
-            // Format: "displaysleep         10"
-            let parts: Vec<&str> = trimmed.split_whitespace().collect();
-            if parts.len() >= 2 {
-                return parts[1].parse().ok();
-            }
+        // Word-boundary match — guards against "sleep" matching "sleepDisabled".
+        let Some(after_key) = trimmed.strip_prefix(key) else {
+            continue;
+        };
+        if !after_key.starts_with(|c: char| c.is_whitespace()) {
+            continue;
+        }
+        if let Some(first) = after_key.split_whitespace().next() {
+            return first.parse().ok();
         }
     }
     None
@@ -246,7 +336,11 @@ fn parse_assertions(output: &str) -> Vec<String> {
                         let assertion_info = format!(
                             "{}: {}",
                             parts.get(1).unwrap_or(&"Unknown"),
-                            line.split('(').next().unwrap_or("").trim().replace("pid ", "PID ")
+                            line.split('(')
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .replace("pid ", "PID ")
                         );
                         assertions.push(assertion_info);
                     }
@@ -256,4 +350,149 @@ fn parse_assertions(output: &str) -> Vec<String> {
     }
 
     assertions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_error_minus_128_is_cancellation() {
+        assert!(
+            authorization_error("execution error: User canceled. (-128)")
+                .starts_with("Authorization canceled")
+        );
+        assert!(
+            authorization_error("execution error: synthetic failure (42)")
+                .contains("synthetic failure")
+        );
+    }
+
+    const SAMPLE_PMSET_G: &str = "\
+System-wide power settings:
+Currently in use:
+ standby              1
+ Sleep On Power Button 1
+ womp                 1
+ hibernatefile        /var/vm/sleepimage
+ powernap             0
+ networkoversleep     0
+ disksleep            10
+ sleep                5 (sleep prevented by caffeinator, powerd)
+ hibernatemode        3
+ ttyskeepawake        1
+ displaysleep         15
+ tcpkeepalive         1
+ lidwake              1
+";
+
+    const SAMPLE_PMSET_G_NO_OVERRIDE: &str = "\
+ disksleep            10
+ sleep                5
+ displaysleep         15
+";
+
+    const SAMPLE_PMSET_PS_AC: &str = "\
+Now drawing from 'AC Power'
+ -InternalBattery-0 (id=1234567)\t100%; charged; 0:00 remaining present: true
+";
+
+    const SAMPLE_PMSET_PS_BATT: &str = "\
+Now drawing from 'Battery Power'
+ -InternalBattery-0 (id=1234567)\t87%; discharging; 4:32 remaining present: true
+";
+
+    const SAMPLE_ASSERTIONS: &str = "\
+Assertion status system-wide:
+   BackgroundTask                 0
+   PreventUserIdleDisplaySleep    0
+   PreventUserIdleSystemSleep     1
+Listed by owning process:
+   pid 1234(caffeinator): [0x000012345678901234] 00:05:30 PreventUserIdleSystemSleep named: \"Caffeinator: Preventing Idle sleep\"
+   pid 5678(powerd): [0x00009876543210ab] 00:00:01 ApplePushServiceTask named: \"com.apple.aps\"
+";
+
+    #[test]
+    fn parses_displaysleep() {
+        assert_eq!(parse_pmset_value(SAMPLE_PMSET_G, "displaysleep"), Some(15));
+    }
+
+    #[test]
+    fn parses_disksleep() {
+        assert_eq!(parse_pmset_value(SAMPLE_PMSET_G, "disksleep"), Some(10));
+    }
+
+    #[test]
+    fn parses_sleep_value_when_prevented() {
+        assert_eq!(parse_pmset_value(SAMPLE_PMSET_G, "sleep"), Some(5));
+    }
+
+    #[test]
+    fn word_boundary_avoids_sleepdisabled() {
+        let input = "sleepDisabled       1\n sleep        7\n";
+        assert_eq!(parse_pmset_value(input, "sleep"), Some(7));
+    }
+
+    #[test]
+    fn returns_none_for_missing_key() {
+        assert!(parse_pmset_value(SAMPLE_PMSET_G, "doesnotexist").is_none());
+    }
+
+    #[test]
+    fn parses_sleep_prevented_by_list() {
+        let prevented = parse_sleep_prevented_by(SAMPLE_PMSET_G);
+        assert_eq!(prevented, vec!["caffeinator", "powerd"]);
+    }
+
+    #[test]
+    fn empty_prevented_by_when_no_override() {
+        let prevented = parse_sleep_prevented_by(SAMPLE_PMSET_G_NO_OVERRIDE);
+        assert!(prevented.is_empty());
+    }
+
+    #[test]
+    fn ignores_sleepdisabled_line_in_prevented_by() {
+        let input = "sleepDisabled          0\n sleep   5\n";
+        assert!(parse_sleep_prevented_by(input).is_empty());
+    }
+
+    #[test]
+    fn detects_ac_power() {
+        assert_eq!(parse_power_source(SAMPLE_PMSET_PS_AC), "AC Power");
+    }
+
+    #[test]
+    fn detects_battery_power() {
+        assert_eq!(parse_power_source(SAMPLE_PMSET_PS_BATT), "Battery");
+    }
+
+    #[test]
+    fn power_source_unknown_when_neither_present() {
+        assert_eq!(parse_power_source(""), "Unknown");
+    }
+
+    #[test]
+    fn parses_active_assertions() {
+        let assertions = parse_assertions(SAMPLE_ASSERTIONS);
+        assert_eq!(assertions.len(), 2);
+        assert!(assertions[0].contains("PreventUserIdleSystemSleep"));
+        assert!(assertions[0].contains("PID 1234"));
+    }
+
+    #[test]
+    fn assertion_type_aliases_lid_close() {
+        // Old settings.json files used "LidClose" before the rename. Must
+        // still deserialize to ServerMode.
+        let parsed: AssertionType = serde_json::from_str("\"LidClose\"").unwrap();
+        assert_eq!(parsed, AssertionType::ServerMode);
+    }
+
+    #[test]
+    fn server_mode_is_only_lid_close_consumer() {
+        assert!(AssertionType::ServerMode.needs_lid_close_prevention());
+        assert!(!AssertionType::NoIdleSleep.needs_lid_close_prevention());
+        assert!(!AssertionType::NoDisplaySleep.needs_lid_close_prevention());
+        assert!(!AssertionType::NetworkActive.needs_lid_close_prevention());
+        assert!(!AssertionType::BackgroundTask.needs_lid_close_prevention());
+    }
 }
