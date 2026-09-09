@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install app dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Raycast dependencies
+        working-directory: extensions/raycast
+        run: bun install --frozen-lockfile
+
+      - name: Check frontend
+        run: bun run build
+
+      - name: Check Raycast extension
+        working-directory: extensions/raycast
+        run: |
+          bun run typecheck
+          bun run test
+          bun run build
+
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Lint Rust
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test Rust
+        working-directory: src-tauri
+        run: cargo test --all-targets --all-features
+
+      - name: Build native application
+        run: bun run tauri build --no-bundle

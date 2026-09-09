@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Caffeinator",
-  "version": "0.0.1-alpha4",
+  "version": "0.1.2-alpha",
   "identifier": "com.tasnimzotder.caffeinator",
   "build": {
     "beforeDevCommand": "bun run dev",
@@ -14,14 +14,16 @@
       {
         "label": "main",
         "title": "Caffeinator",
-        "width": 380,
-        "height": 520,
+        "width": 400,
+        "height": 480,
         "resizable": false,
         "visible": false,
         "decorations": false,
         "skipTaskbar": true,
         "alwaysOnTop": true,
-        "backgroundColor": [20, 18, 16, 255]
+        "transparent": true,
+        "shadow": false,
+        "backgroundColor": [0, 0, 0, 0]
       }
     ],
     "security": {

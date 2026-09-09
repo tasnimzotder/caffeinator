@@ -1,141 +1,125 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { command, subscribeStatus } from "../lib/backend";
 import type { AssertionType, CaffeinateStatus } from "../types";
 
 const DEFAULT_STATUS: CaffeinateStatus = {
   is_active: false,
   mode: null,
+  selected_mode: "NoIdleSleep",
+  selected_duration: 3600,
   remaining_seconds: null,
   total_seconds: null,
+  busy: false,
+  recovery_required: false,
+  error: null,
+  revision: -1,
 };
 
-function formatTrayTime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) {
-    return `${h}:${m.toString().padStart(2, "0")}`;
-  }
-  return `${m}m`;
-}
-
 export function useCaffeinate() {
-  const [status, setStatus] = useState<CaffeinateStatus>(DEFAULT_STATUS);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const fetchingRef = useRef(false);
-  const prevTrayTitleRef = useRef("");
+  const [status, setStatus] = useState(DEFAULT_STATUS);
+  const [ready, setReady] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [dismissedRevision, setDismissedRevision] = useState<number | null>(
+    null,
+  );
+  const inFlight = useRef(false);
 
-  const prevTrayActiveRef = useRef(false);
-
-  const updateTray = useCallback(async (s: CaffeinateStatus) => {
-    // Switch tray icon on state change
-    if (s.is_active !== prevTrayActiveRef.current) {
-      prevTrayActiveRef.current = s.is_active;
-      invoke("set_tray_active", { active: s.is_active }).catch(() => {});
-    }
-
-    const title = s.is_active
-      ? (s.remaining_seconds !== null ? formatTrayTime(s.remaining_seconds) : "∞")
-      : "";
-
-    if (title === prevTrayTitleRef.current) return;
-    prevTrayTitleRef.current = title;
-
-    try {
-      await invoke("update_tray_title", { title });
-    } catch {
-      // Ignore tray update errors
-    }
+  const accept = useCallback((next: CaffeinateStatus) => {
+    setStatus((previous) => {
+      if (next.revision < previous.revision) return previous;
+      if (
+        next.revision === previous.revision &&
+        next.remaining_seconds !== null &&
+        previous.remaining_seconds !== null &&
+        next.remaining_seconds > previous.remaining_seconds
+      )
+        return previous;
+      return next;
+    });
+    setReady(true);
   }, []);
 
-  const fetchStatus = useCallback(async () => {
-    if (fetchingRef.current) return;
-    fetchingRef.current = true;
-
+  const refresh = useCallback(async () => {
     try {
-      const result = await invoke<CaffeinateStatus>("get_status");
-      setStatus(result);
-      updateTray(result);
-      setError(null);
-
-      // Auto-deactivate when timer expires
-      if (result.is_active && result.remaining_seconds === 0) {
-        await invoke("deactivate");
-        const newStatus = await invoke<CaffeinateStatus>("get_status");
-        setStatus(newStatus);
-        updateTray(newStatus);
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      fetchingRef.current = false;
+      accept(await command<CaffeinateStatus>("get_status"));
+      setLocalError(null);
+    } catch (error) {
+      setLocalError(String(error));
     }
-  }, [updateTray]);
+  }, [accept]);
 
-  const activate = useCallback(
-    async (mode: AssertionType, durationSecs: number | null) => {
-      setLoading(true);
-      setError(null);
+  const mutate = useCallback(
+    async (name: string, args?: Record<string, unknown>) => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      setPending(true);
+      setLocalError(null);
       try {
-        const result = await invoke<CaffeinateStatus>("activate", {
-          mode,
-          durationSecs,
-        });
-        setStatus(result);
-        updateTray(result);
-      } catch (e) {
-        setError(String(e));
+        accept(await command<CaffeinateStatus>(name, args));
+      } catch (error) {
+        setLocalError(String(error));
+        try {
+          accept(await command<CaffeinateStatus>("get_status"));
+        } catch {
+          /* Keep the action error. */
+        }
       } finally {
-        setLoading(false);
+        inFlight.current = false;
+        setPending(false);
       }
     },
-    [updateTray]
+    [accept],
   );
 
-  const deactivate = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await invoke<CaffeinateStatus>("deactivate");
-      setStatus(result);
-      updateTray(result);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [updateTray]);
-
-  // Initial fetch + visibility listener
   useEffect(() => {
-    fetchStatus();
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        fetchStatus();
-      }
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    // Subscribe first, then fetch: no gap where native changes can be lost.
+    subscribeStatus((next) => {
+      if (!disposed) accept(next);
+    })
+      .then((cleanup) => {
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlisten = cleanup;
+        refresh();
+      })
+      .catch((error) => {
+        if (!disposed) setLocalError(String(error));
+      });
+    const visibility = () => {
+      if (document.visibilityState === "visible") refresh();
     };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("focus", refresh);
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      disposed = true;
+      unlisten?.();
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("focus", refresh);
     };
-  }, [fetchStatus]);
-
-  // Poll every second only when active
-  useEffect(() => {
-    if (!status.is_active) return;
-
-    const interval = setInterval(fetchStatus, 1000);
-    return () => clearInterval(interval);
-  }, [fetchStatus, status.is_active]);
+  }, [accept, refresh]);
 
   return {
     status,
-    loading,
-    error,
-    activate,
-    deactivate,
-    refresh: fetchStatus,
+    ready,
+    loading: pending || status.busy,
+    error:
+      localError ??
+      (dismissedRevision === status.revision ? null : status.error),
+    activate: (mode: AssertionType, durationSecs: number | null) =>
+      mutate("activate", { mode, durationSecs }),
+    deactivate: () => mutate("deactivate"),
+    selectMode: (mode: AssertionType) => mutate("set_selected_mode", { mode }),
+    selectDuration: (durationSecs: number | null) =>
+      mutate("set_selected_duration", { durationSecs }),
+    refresh,
+    dismissError: () => {
+      setLocalError(null);
+      setDismissedRevision(status.revision);
+    },
   };
 }

@@ -1,321 +1,57 @@
-# Caffeinator Internals
+# Caffeinator internals
 
-Developer documentation for how Caffeinator interacts with macOS system APIs.
+## Native state owns the session
 
-## Architecture
+React, the native tray, and Raycast all call the same Rust state machine in `state.rs`. A transition lock serializes activation, deactivation, and preference changes. Status has a separate short-lived lock, so a macOS authorization prompt does not block status reads. Commands that could prompt or wait run off the main UI thread. AppKit window changes are dispatched onto the main thread.
 
-Caffeinator is a Tauri v2 application with a Rust backend and React frontend.
+`CaffeinateStatus` includes activity, active and selected modes, selected duration, remaining and total seconds, busy state, recovery state, an actionable error, and a monotonically increasing revision. React subscribes before its initial status fetch and rejects stale revisions. The one-second status stream is independent of the minute-formatted tray title. Countdown values round upward, so expiration does not happen early.
 
-```mermaid
-flowchart LR
-    subgraph Frontend
-        React[React UI]
-    end
+Timer expiry rechecks the current deadline under the transition lock. It cannot stop a newer session using an old snapshot. A failed expiry cleanup records an error and stops automatic retries, avoiding repeated authorization prompts.
 
-    subgraph Backend
-        Tauri[Tauri IPC]
-        Rust[Rust Commands]
-    end
+## Assertion lifecycle and Server Mode
 
-    subgraph macOS
-        IOKit[IOKit Framework]
-        pmset[pmset CLI]
-        LaunchAgent[LaunchAgent]
-    end
+Normal modes use an IOKit assertion owned by the app process. An assertion is retained in state until its release succeeds.
 
-    React <-->|invoke/listen| Tauri
-    Tauri <--> Rust
-    Rust <-->|FFI| IOKit
-    Rust -->|spawn| pmset
-    Rust <-->|plugin| LaunchAgent
+Server Mode also reads the global `SleepDisabled` value from `pmset -g` and records it in `~/.config/caffeinator/power-recovery.json`. The journal is written atomically and synced before requesting `pmset -a disablesleep 1`. Neither activation nor cleanup edits the user's normal sleep timers.
+
+Deactivation restores the recorded override first, verifies the value, removes the journal, and then releases the assertion. A canceled prompt or failed restoration retains state for an explicit retry. An interrupted session is detected from the journal on startup; the app displays restoration instead of claiming readiness. A malformed or unsupported journal fails closed without guessing a replacement setting.
+
+AppleScript error -128 identifies cancellation. General exit status 1 is not treated as cancellation.
+
+The app cannot restore a global setting during a crash or force-quit; the journal makes restoration possible on the next launch. Regular Quit requests complete cleanup first and leave the app running if cleanup fails. macOS shutdown or process termination may bypass that path.
+
+## Preferences
+
+`~/.config/caffeinator/settings.json` contains the selected mode, selected duration, and schema version. A missing version means version 0. Version 1 introduced versioning; version 2 added remembered duration. Writes use a synced temporary file and rename.
+
+Mode and duration selections are persisted through native commands. A successful activation also updates the defaults, including sessions started from the tray or Raycast. The tray's selected-mode indicators refresh after changes from any entry point.
+
+## Raycast control channel
+
+`control.rs` binds `~/.config/caffeinator/control.sock` with mode 0600. The single-instance plugin prevents competing copies of the app. Existing non-socket files and symlinks at the socket path are rejected.
+
+Each connection carries one newline-delimited JSON request and one response:
+
+```json
+{"command":"start","mode":"NoIdleSleep","duration_secs":1800}
 ```
 
-## Sleep Prevention
+Supported commands are `status`, `start`, `stop`, `toggle`, `show`, and `preferences`. Start and preferences accept a mode and a duration in seconds (null means indefinite). Responses have `ok`, `status`, and `error`.
 
-The core feature uses macOS IOKit framework to create power assertions that prevent sleep.
+Requests are bounded to 8192 bytes, reads/writes have timeouts, and concurrent connections are bounded. No arbitrary shell command, filesystem path, TCP listener, or administrator credential is exposed by the protocol.
 
-### IOKit FFI Bindings
+The Raycast client probes with a read-only status request. If the socket is missing or refuses connection, it can launch the configured app with `open -g -a` and wait for availability. Once a mutating request is sent, it is never replayed automatically after an uncertain response. The extension's status view refreshes every five seconds.
 
-**File:** `src-tauri/src/power.rs`
+## Live power telemetry
 
-```rust
-#[link(name = "IOKit", kind = "framework")]
-extern "C" {
-    fn IOPMAssertionCreateWithName(
-        assertion_type: CFStringRef,    // Type of assertion
-        assertion_level: u32,           // Level (255 = ON)
-        assertion_name: CFStringRef,    // Reason string
-        assertion_id: *mut u32,         // Output: assertion ID
-    ) -> i32;                           // 0 = success
+The Power view polls `get_power_telemetry` every two seconds while visible, without overlapping requests. `telemetry.rs` reads the AppleSmartBattery IORegistry service as a plist. PowerTelemetryData's SystemLoad, BatteryPower, and SystemPowerIn values are converted from milliwatts to watts. The adapter's rated Watts value is displayed separately from measured input. Voltage/current are converted from millivolts/milliamps; signed and unsigned two's-complement discharge current are both supported.
 
-    fn IOPMAssertionRelease(assertion_id: u32) -> i32;
-}
-```
+Battery percentage, charging/full/plugged-in state, and time remaining come from macOS battery fields. Missing sensors are unavailable, never invented as zero. The system-draw graph retains up to 60 seconds of readings. Failed reads are marked stale and retried. This uses read-only sensors and does not require administrator authorization.
 
-### Constants
+## Interface and verification
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `K_IOPM_ASSERTION_LEVEL_ON` | `255` | Assertion is active |
-| `kIOReturnSuccess` | `0` | Operation succeeded |
+The webview is a 400 × 480 popover with a scrollable content region, fixed navigation, and fixed footer. It hides on focus loss. Reduced-motion settings suppress animations, controls have keyboard focus indicators, and active actions disable while native transitions are pending.
 
-### Assertion Types
+The browser preview is available only in Vite development when there is no Tauri bridge. It explicitly labels sessions as simulated; release bundles require the native bridge.
 
-| Mode | IOKit Assertion | Description |
-|------|-----------------|-------------|
-| Idle | `PreventUserIdleSystemSleep` | Prevents idle sleep, user can still force sleep |
-| Display | `PreventUserIdleDisplaySleep` | Keeps display awake |
-| System | `PreventSystemSleep` | Prevents all system sleep |
-| Network | `NetworkClientActive` | Network activity mode |
-| Background | `BackgroundTask` | Background task mode |
-
-### Assertion Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> Inactive
-    Inactive --> Creating: activate()
-    Creating --> Active: IOPMAssertionCreateWithName()
-    Active --> Releasing: deactivate() / timer expires
-    Releasing --> Inactive: IOPMAssertionRelease()
-    Active --> Active: Timer counting down
-```
-
-### Thread Safety
-
-- Global atomic `CURRENT_ASSERTION_ID: AtomicU32` stores the active assertion
-- Uses `Ordering::SeqCst` for sequential consistency across threads
-- Only one assertion can be active at a time (single-assertion model)
-
-### Error Handling
-
-```rust
-// Create returns Result<u32, String>
-if result == 0 {
-    CURRENT_ASSERTION_ID.store(assertion_id, Ordering::SeqCst);
-    Ok(assertion_id)
-} else {
-    Err(format!("Failed to create power assertion: error code {}", result))
-}
-
-// Release is idempotent - releasing ID 0 is a no-op
-if assertion_id == 0 {
-    return Ok(());
-}
-```
-
-### Common IOKit Error Codes
-
-| Code | Meaning |
-|------|---------|
-| `0` | Success |
-| `0xe00002bc` | Invalid argument |
-| `0xe00002c2` | No memory |
-
-## Power Profile Querying
-
-**File:** `src-tauri/src/power.rs`
-
-Queries current power settings using system commands:
-
-```bash
-pmset -g              # Get power settings
-pmset -g assertions   # List active assertions
-```
-
-**Parsed into:**
-```rust
-pub struct PowerProfile {
-    pub source: String,              // "AC Power" or "Battery"
-    pub display_sleep: Option<u32>,  // Minutes
-    pub disk_sleep: Option<u32>,     // Minutes
-    pub system_sleep: Option<u32>,   // Minutes
-    pub assertions: Vec<String>,     // Active assertions
-}
-```
-
-## Menu Bar Integration
-
-**File:** `src-tauri/src/lib.rs`
-
-### Tray Setup
-
-```rust
-TrayIconBuilder::with_id("tray")
-    .icon(Image::from_bytes(include_bytes!("../icons/32x32.png")))
-    .icon_as_template(true)      // macOS auto-colorizes
-    .show_menu_on_left_click(false)
-    .menu(&menu)
-    .on_tray_icon_event(handler)
-```
-
-### Click Handling
-
-```mermaid
-flowchart TD
-    Click[Tray Icon Click]
-    Click -->|Left Click| Toggle{Window Visible?}
-    Toggle -->|Yes| Hide[Hide Window]
-    Toggle -->|No| Show[Show & Focus Window]
-    Click -->|Right Click| Menu[Show Context Menu]
-    Menu --> Quit[Quit Option]
-```
-
-### Dynamic Title Updates
-
-The tray title shows remaining time:
-- `2:30` for hours:minutes
-- `45m` for minutes only
-- Empty when inactive
-
-Updated every second via frontend polling.
-
-## Window Management
-
-**File:** `src-tauri/tauri.conf.json`
-
-| Property | Value | Purpose |
-|----------|-------|---------|
-| `visible` | `false` | Hidden by default |
-| `decorations` | `false` | No title bar |
-| `transparent` | `true` | Transparent background |
-| `skipTaskbar` | `true` | Not in Dock |
-| `alwaysOnTop` | `true` | Stays above other windows |
-
-### Dock Hiding
-
-```rust
-#[cfg(target_os = "macos")]
-app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-```
-
-This makes the app a menu bar utility without a Dock icon.
-
-## Launch at Login
-
-**File:** `src-tauri/src/lib.rs`
-
-Uses `tauri-plugin-autostart`:
-
-```rust
-.plugin(tauri_plugin_autostart::init(
-    MacosLauncher::LaunchAgent,
-    Some(vec!["--minimized"]),
-))
-```
-
-**Creates plist at:**
-```
-~/Library/LaunchAgents/com.tasnimzotder.caffeinator.plist
-```
-
-## State Management
-
-**File:** `src-tauri/src/state.rs`
-
-### AppState Structure
-
-```rust
-pub struct AppState {
-    pub assertion_id: Mutex<u32>,              // Active IOKit assertion ID (0 = none)
-    pub mode: Mutex<Option<AssertionType>>,    // Current sleep prevention mode
-    pub start_time: Mutex<Option<Instant>>,    // When caffeination started
-    pub duration: Mutex<Option<Duration>>,     // Requested duration (None = indefinite)
-}
-```
-
-### State Flow
-
-```mermaid
-flowchart LR
-    A[activate] --> B[set_active]
-    B --> C[Store ID + mode + start_time + duration]
-
-    D[Frontend polls] --> E[get_status]
-    E --> F[Calculate remaining_seconds]
-    F --> G{Expired?}
-    G -->|Yes| H[deactivate]
-    G -->|No| D
-
-    H --> I[clear]
-    I --> J[Reset all fields to None/0]
-```
-
-### Duration Calculation
-
-```rust
-let remaining = match (start_time, duration) {
-    (Some(start), Some(dur)) => {
-        let elapsed = start.elapsed();
-        if elapsed >= dur { Some(0) }
-        else { Some((dur - elapsed).as_secs()) }
-    }
-    _ => None,  // Indefinite mode
-};
-```
-
----
-
-## API Reference
-
-### Rust Functions (`power.rs`)
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `create_assertion` | `(AssertionType, &str) -> Result<u32, String>` | Creates IOKit assertion |
-| `release_assertion` | `(u32) -> Result<(), String>` | Releases assertion by ID |
-| `get_power_profile` | `() -> Result<PowerProfile, String>` | Queries pmset |
-
-### AppState Methods (`state.rs`)
-
-| Method | Description |
-|--------|-------------|
-| `get_status()` | Returns `CaffeinateStatus` for IPC |
-| `set_active(id, mode, duration)` | Activates with optional duration |
-| `clear()` | Resets all state fields |
-| `is_expired()` | Returns true if timer has elapsed |
-
-### IPC Commands (`commands.rs`)
-
-| Command | Parameters | Returns | Description |
-|---------|-----------|---------|-------------|
-| `activate` | `mode`, `duration_secs` | `Result<()>` | Create power assertion |
-| `deactivate` | - | `Result<()>` | Release assertion |
-| `get_status` | - | `CaffeinateStatus` | Current state & remaining time |
-| `toggle` | `mode`, `duration_secs` | `Result<bool>` | Toggle on/off |
-| `update_tray_title` | `title` | `Result<()>` | Update menu bar text |
-| `get_power_profile` | - | `Result<PowerProfile>` | Query pmset |
-| `quit_app` | - | `()` | Clean exit |
-| `get_autostart_enabled` | - | `Result<bool>` | Check login item |
-| `set_autostart_enabled` | `enabled` | `Result<()>` | Set login item |
-
-### TypeScript Types
-
-```typescript
-type AssertionType =
-  | "NoIdleSleep"
-  | "NoDisplaySleep"
-  | "PreventSystemSleep"
-  | "NetworkActive"
-  | "BackgroundTask";
-
-interface CaffeinateStatus {
-  is_active: boolean;
-  mode: AssertionType | null;
-  remaining_seconds: number | null;  // null = indefinite
-  total_seconds: number | null;
-}
-```
-
----
-
-## File Reference
-
-| File | Purpose |
-|------|---------|
-| `src-tauri/src/power.rs` | IOKit FFI, assertion create/release |
-| `src-tauri/src/commands.rs` | All Tauri IPC commands |
-| `src-tauri/src/lib.rs` | App setup, tray, plugins |
-| `src-tauri/src/state.rs` | App state & duration tracking |
-| `src/hooks/useCaffeinate.ts` | Frontend state, polling, tray updates |
-| `src/App.tsx` | Main UI component |
+Rust tests exercise recovery, retained assertions, expiry, invalid durations, preferences migration, power-output parsing, and control-request validation. Raycast transport tests cover fragmented replies, malformed/oversized responses, connection errors, and non-replay after an uncertain toggle. The native smoke-test script checks a real short IOKit session without requesting privileged Server Mode.
