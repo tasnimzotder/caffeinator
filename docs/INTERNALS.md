@@ -22,9 +22,9 @@ The app cannot restore a global setting during a crash or force-quit; the journa
 
 ## Preferences
 
-`~/.config/caffeinator/settings.json` contains the selected mode, selected duration, and schema version. A missing version means version 0. Version 1 introduced versioning; version 2 added remembered duration. Writes use a synced temporary file and rename.
+`~/.config/caffeinator/caffeinator.sqlite3` is the native source of truth for preferences, session history, and sampled power telemetry. SQLite uses WAL mode, a five-second busy timeout, constrained values, and explicit schema migrations. On first launch after upgrading, the app imports a valid `settings.json` row transactionally and then attempts to remove the legacy file. The crash-recovery journal remains a separate synced JSON file because it must be durable before privileged system settings change.
 
-Mode and duration selections are persisted through native commands. A successful activation also updates the defaults, including sessions started from the tray or Raycast. The tray's selected-mode indicators refresh after changes from any entry point.
+Mode and duration selections are persisted through native commands. A successful activation also updates the defaults and opens a session-history row, including sessions started from the tray or Raycast. Successful stop and expiry transitions close that row with a reason. Startup reconciliation marks orphaned normal sessions interrupted while preserving a recoverable Server Mode row until restoration finishes.
 
 ## Raycast control channel
 
@@ -48,10 +48,16 @@ The Power view polls `get_power_telemetry` every two seconds while visible, with
 
 Battery percentage, charging/full/plugged-in state, and time remaining come from macOS battery fields. Missing sensors are unavailable, never invented as zero. The system-draw graph retains up to 60 seconds of readings. Failed reads are marked stale and retried. This uses read-only sensors and does not require administrator authorization.
 
+## Recorded power history
+
+While the app runs, a native worker samples the same read-only sensors every 30 seconds. Samples are stored in fixed 30-second buckets, so opening the Power view does not increase database growth. Raw samples are retained for seven days. The history command aggregates them into roughly screen-sized buckets for the last hour, day, or week and returns average draw, peak draw, sample count, overlapping session time, and recent sessions.
+
+The Power view keeps the two-second live instrument separate from this durable timeline. Range changes and 30-second refreshes query the Rust-owned database through Tauri; neither React nor Raycast opens SQLite directly. The browser preview supplies deterministic simulated history through the same response contract.
+
 ## Interface and verification
 
 The webview is a 400 × 480 popover with a scrollable content region, fixed navigation, and fixed footer. It hides on focus loss. Reduced-motion settings suppress animations, controls have keyboard focus indicators, and active actions disable while native transitions are pending.
 
 The browser preview is available only in Vite development when there is no Tauri bridge. It explicitly labels sessions as simulated; release bundles require the native bridge.
 
-Rust tests exercise recovery, retained assertions, expiry, invalid durations, preferences migration, power-output parsing, and control-request validation. Raycast transport tests cover fragmented replies, malformed/oversized responses, connection errors, and non-replay after an uncertain toggle. The native smoke-test script checks a real short IOKit session without requesting privileged Server Mode.
+Rust tests exercise recovery, retained assertions, expiry, invalid durations, SQLite schema upgrades, settings import, telemetry aggregation, session lifecycle history, power-output parsing, and control-request validation. Frontend tests cover native/camel-case IPC normalization. Raycast transport tests cover fragmented replies, malformed/oversized responses, connection errors, and non-replay after an uncertain toggle. The native smoke-test script checks a real short IOKit session without requesting privileged Server Mode.

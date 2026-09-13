@@ -8,7 +8,7 @@ cask "caffeinator" do
   homepage "https://github.com/tasnimzotder/caffeinator"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :big_sur"
+  depends_on macos: :big_sur
 
   livecheck do
     url :url

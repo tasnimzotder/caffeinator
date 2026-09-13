@@ -14,7 +14,7 @@ A macOS menu-bar utility with a warm, dark popover. Choose a mode and duration, 
 - Remembered mode and duration across the app, menu bar, and Raycast.
 - Presets, custom durations up to seven days, and indefinite sessions.
 - Launch at login, keyboard shortcuts, and click-outside dismissal.
-- Live system watts, battery charging/discharging power, adapter input, battery percentage, voltage/current, and charging estimates, plus a 60-second trace (where supported by macOS).
+- Live system watts, battery charging/discharging power, adapter input, battery percentage, voltage/current, and charging estimates, plus a durable seven-day power timeline and awake-session history (where supported by macOS).
 - Native sleep preferences and active power assertions.
 - Recoverable Server Mode with explicit error handling and saved original settings.
 

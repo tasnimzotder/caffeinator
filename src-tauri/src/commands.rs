@@ -1,5 +1,6 @@
 use crate::power::{self, AssertionType, PowerProfile};
 use crate::state::{AppState, CaffeinateStatus};
+use crate::storage::{self, HistoryRange, PowerHistory};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
@@ -76,6 +77,13 @@ pub async fn get_power_profile() -> Result<PowerProfile, String> {
 #[tauri::command]
 pub async fn get_power_telemetry() -> Result<crate::telemetry::PowerTelemetry, String> {
     tauri::async_runtime::spawn_blocking(crate::telemetry::read)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_power_history(range: HistoryRange) -> Result<PowerHistory, String> {
+    tauri::async_runtime::spawn_blocking(move || storage::power_history(range))
         .await
         .map_err(|e| e.to_string())?
 }

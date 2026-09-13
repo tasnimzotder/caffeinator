@@ -78,7 +78,7 @@ fn handle(app: &AppHandle, mut stream: UnixStream) -> Result<(), String> {
 }
 
 pub fn start(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = crate::settings::config_dir();
+    let dir = crate::storage::config_dir();
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("control.sock");
     // The single-instance plugin has already claimed this app. Only remove a
