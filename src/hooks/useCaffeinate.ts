@@ -87,8 +87,15 @@ export function useCaffeinate() {
         unlisten = cleanup;
         refresh();
       })
-      .catch((error) => {
-        if (!disposed) setLocalError(String(error));
+      .catch(async (error) => {
+        if (disposed) return;
+        setLocalError(String(error));
+        try {
+          const next = await command<CaffeinateStatus>("get_status");
+          if (!disposed) accept(next);
+        } catch (refreshError) {
+          if (!disposed) setLocalError(String(refreshError));
+        }
       });
     const visibility = () => {
       if (document.visibilityState === "visible") refresh();
