@@ -41,7 +41,9 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Check frontend
-        run: bun run build
+        run: |
+          bun run build
+          bun test tests/powerTelemetry.test.ts
 
       - name: Check Raycast extension
         working-directory: extensions/raycast

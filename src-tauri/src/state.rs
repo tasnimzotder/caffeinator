@@ -34,7 +34,6 @@ impl PowerControl for MacPower {
         settings::save(&settings::Settings {
             selected_mode: mode,
             selected_duration: duration,
-            ..Default::default()
         })
         .map_err(|e| format!("Could not save your preferences: {e}"))
     }

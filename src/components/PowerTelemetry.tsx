@@ -6,8 +6,9 @@ import {
   Plug,
   Zap,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Component, type ReactNode, useEffect, useState } from "react";
 import { command, preview } from "../lib/backend";
+import { normalizePowerTelemetry } from "../lib/powerTelemetry";
 import type { PowerTelemetry as Sample } from "../types";
 
 const watts = (value: number | null) =>
@@ -19,7 +20,7 @@ function remaining(minutes: number) {
     .filter(Boolean)
     .join(" ");
 }
-export function PowerTelemetry() {
+function PowerTelemetryContent() {
   const [sample, setSample] = useState<Sample | null>(null);
   const [history, setHistory] = useState<{ watts: number; at: number }[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +34,9 @@ export function PowerTelemetry() {
       if (document.visibilityState !== "hidden") {
         pending = true;
         try {
-          const next = await command<Sample>("get_power_telemetry");
+          const next = normalizePowerTelemetry(
+            await command<unknown>("get_power_telemetry"),
+          );
           if (!disposed) {
             setSample(next);
             setError(null);
@@ -80,7 +83,10 @@ export function PowerTelemetry() {
       </div>
     );
   const charging = sample.charging_state === "charging";
-  const pluggedIn = sample.charging_state !== "battery";
+  const pluggedIn =
+    sample.charging_state === "charging" ||
+    sample.charging_state === "full" ||
+    sample.charging_state === "plugged_in";
   const StateIcon = charging
     ? BatteryCharging
     : sample.charging_state === "full"
@@ -94,7 +100,9 @@ export function PowerTelemetry() {
       ? "Fully charged"
       : pluggedIn
         ? "Plugged in · not charging"
-        : "On battery";
+        : sample.charging_state === "battery"
+          ? "On battery"
+          : "Power state unavailable";
   const ceiling = Math.max(10, ...history.map((point) => point.watts)) * 1.2;
   const latest = history[history.length - 1]?.at ?? Date.now();
   const points = history
@@ -220,5 +228,40 @@ export function PowerTelemetry() {
         </p>
       )}
     </div>
+  );
+}
+
+class PowerTelemetryBoundary extends Component<
+  { children: ReactNode },
+  { error: string | null }
+> {
+  state = { error: null as string | null };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error("Power telemetry render failed", error);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="notice" role="alert">
+          <Battery size={18} />
+          <p>Power readings could not be displayed. {this.state.error}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function PowerTelemetry() {
+  return (
+    <PowerTelemetryBoundary>
+      <PowerTelemetryContent />
+    </PowerTelemetryBoundary>
   );
 }

@@ -40,7 +40,7 @@ export interface PowerProfile {
 
 export interface PowerTelemetry {
   battery_percent: number | null;
-  charging_state: "charging" | "full" | "plugged_in" | "battery";
+  charging_state: "charging" | "full" | "plugged_in" | "battery" | "unknown";
   system_watts: number | null;
   adapter_input_watts: number | null;
   battery_watts: number | null;

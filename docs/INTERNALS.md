@@ -22,7 +22,7 @@ The app cannot restore a global setting during a crash or force-quit; the journa
 
 ## Preferences
 
-`~/.config/caffeinator/settings.json` contains the selected mode, selected duration, and schema version. A missing version means version 0. Version 1 introduced versioning; version 2 added remembered duration. Writes use a synced temporary file and rename.
+`~/.config/caffeinator/caffeinator.sqlite3` stores the selected mode and duration. SQLite uses WAL mode, a five-second busy timeout, constrained values, and an explicit schema version. On first launch after upgrading, the app imports a valid `settings.json` row transactionally and then attempts to remove the legacy file. The crash-recovery journal remains a separate synced JSON file because it must be durable before privileged system settings change.
 
 Mode and duration selections are persisted through native commands. A successful activation also updates the defaults, including sessions started from the tray or Raycast. The tray's selected-mode indicators refresh after changes from any entry point.
 
