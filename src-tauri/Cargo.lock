@@ -362,11 +362,12 @@ dependencies = [
 
 [[package]]
 name = "caffeinator"
-version = "0.1.3-alpha"
+version = "0.1.4-alpha"
 dependencies = [
  "core-foundation",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
+ "parking_lot",
  "plist",
  "rusqlite",
  "serde",

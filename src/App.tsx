@@ -27,6 +27,7 @@ import { command, native } from "./lib/backend";
 import { MODE_INFO, type AssertionType, type PowerProfile } from "./types";
 import "./App.css";
 import { PowerTelemetry } from "./components/PowerTelemetry";
+import { PowerHistory } from "./components/PowerHistory";
 
 type View = "session" | "power" | "settings";
 const PRESETS = [
@@ -630,7 +631,7 @@ function App() {
             <div className="page-heading">
               <div>
                 <h1 id="power-heading">Power</h1>
-                <p>Live draw, charging, and sleep settings.</p>
+                <p>Live draw, recorded trends, and sleep settings.</p>
               </div>
               <button
                 className="icon-button bordered"
@@ -642,6 +643,7 @@ function App() {
               </button>
             </div>
             <PowerTelemetry />
+            <PowerHistory />
             {profileError && (
               <div className="notice error-notice" role="alert">
                 <p>{profileError}</p>

@@ -1,8 +1,8 @@
 use crate::{
     power::{self, AssertionType},
-    settings,
+    storage,
 };
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -28,10 +28,16 @@ trait PowerControl: Send + Sync {
     fn save_preferences(&self, mode: AssertionType, duration: Option<u64>) -> Result<(), String>;
 }
 
+trait SessionHistoryControl: Send + Sync {
+    fn start(&self, mode: AssertionType, duration: Option<u64>) -> Result<i64, String>;
+    fn end(&self, id: i64, reason: &str) -> Result<(), String>;
+    fn reconcile(&self, server_recovery: bool) -> Result<Option<i64>, String>;
+}
+
 struct MacPower;
 impl PowerControl for MacPower {
     fn save_preferences(&self, mode: AssertionType, duration: Option<u64>) -> Result<(), String> {
-        settings::save(&settings::Settings {
+        storage::save(&storage::Settings {
             selected_mode: mode,
             selected_duration: duration,
         })
@@ -54,6 +60,21 @@ impl PowerControl for MacPower {
     }
 }
 
+struct SqliteSessionHistory;
+impl SessionHistoryControl for SqliteSessionHistory {
+    fn start(&self, mode: AssertionType, duration: Option<u64>) -> Result<i64, String> {
+        storage::start_session(mode, duration)
+    }
+
+    fn end(&self, id: i64, reason: &str) -> Result<(), String> {
+        storage::end_session(id, reason)
+    }
+
+    fn reconcile(&self, server_recovery: bool) -> Result<Option<i64>, String> {
+        storage::reconcile_sessions(server_recovery)
+    }
+}
+
 struct InnerState {
     assertion_id: Option<u32>,
     mode: Option<AssertionType>,
@@ -65,6 +86,7 @@ struct InnerState {
     busy: bool,
     error: Option<String>,
     revision: u64,
+    history_session_id: Option<i64>,
 }
 
 pub struct AppState {
@@ -73,13 +95,18 @@ pub struct AppState {
     // not take this lock, so the webview remains responsive during a prompt.
     operation: Mutex<()>,
     power: Box<dyn PowerControl>,
+    history: Box<dyn SessionHistoryControl>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        let settings = settings::load();
-        let state = Self::new(Box::new(MacPower), settings.selected_mode);
-        state.inner.lock().unwrap().selected_duration = settings
+        let settings = storage::load();
+        let state = Self::new(
+            Box::new(MacPower),
+            Box::new(SqliteSessionHistory),
+            settings.selected_mode,
+        );
+        state.inner.lock().selected_duration = settings
             .selected_duration
             .filter(|secs| *secs > 0 && *secs <= 7 * 24 * 3600);
         state
@@ -87,7 +114,11 @@ impl Default for AppState {
 }
 
 impl AppState {
-    fn new(power: Box<dyn PowerControl>, selected_mode: AssertionType) -> Self {
+    fn new(
+        power: Box<dyn PowerControl>,
+        history: Box<dyn SessionHistoryControl>,
+        selected_mode: AssertionType,
+    ) -> Self {
         let recovery = power.recovery_needed();
         let server_owned = recovery.as_ref().copied().unwrap_or(true);
         let error = match recovery {
@@ -95,6 +126,7 @@ impl AppState {
             Err(error) => Some(error),
             Ok(false) => None,
         };
+        let history_session_id = history.reconcile(server_owned).unwrap_or(None);
         Self {
             inner: Mutex::new(InnerState {
                 assertion_id: None,
@@ -107,14 +139,16 @@ impl AppState {
                 busy: false,
                 error,
                 revision: 0,
+                history_session_id,
             }),
             operation: Mutex::new(()),
             power,
+            history,
         }
     }
 
     pub fn get_status(&self) -> CaffeinateStatus {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         let remaining_seconds = match (inner.start_time, inner.duration) {
             (Some(start), Some(duration)) => {
                 let remaining = duration.saturating_sub(start.elapsed());
@@ -138,17 +172,16 @@ impl AppState {
     }
 
     fn transition(&self, action: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
-        let _operation = self
-            .operation
-            .try_lock()
-            .map_err(|_| "Another operation is in progress. Please wait.".to_string())?;
+        let Some(_operation) = self.operation.try_lock() else {
+            return Err("Another operation is in progress. Please wait.".to_string());
+        };
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             inner.busy = true;
             inner.revision += 1;
         }
         let result = action();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.busy = false;
         inner.error = result.as_ref().err().cloned();
         inner.revision += 1;
@@ -156,7 +189,7 @@ impl AppState {
     }
 
     pub fn selected_mode(&self) -> AssertionType {
-        self.inner.lock().unwrap().selected_mode
+        self.inner.lock().selected_mode
     }
 
     pub fn select_mode(&self, mode: AssertionType) -> Result<(), String> {
@@ -180,7 +213,7 @@ impl AppState {
                 return Err("Stop your session before changing its defaults.".into());
             }
             self.power.save_preferences(mode, duration)?;
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             inner.selected_mode = mode;
             inner.selected_duration = duration;
             Ok(())
@@ -198,7 +231,7 @@ impl AppState {
         self.transition(|| {
             let status = self.get_status();
             if status.is_active {
-                self.cleanup()
+                self.cleanup("stopped")
             } else {
                 self.activate_locked(status.selected_mode, status.selected_duration)
             }
@@ -215,26 +248,26 @@ impl AppState {
         }
         self.power.save_preferences(mode, duration_secs)?;
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             inner.selected_mode = mode;
             inner.selected_duration = duration_secs;
         }
-        self.cleanup()?;
+        self.cleanup("replaced")?;
         let id = self.power.create(mode)?;
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock();
             inner.assertion_id = Some(id);
             inner.mode = Some(mode);
         }
         if mode.needs_lid_close_prevention() {
             let enabled = self.power.enable_server();
-            self.inner.lock().unwrap().server_owned = self.power.recovery_needed().unwrap_or(true);
+            self.inner.lock().server_owned = self.power.recovery_needed().unwrap_or(true);
             if let Err(error) = enabled {
                 // Retain any uncertain global override for explicit recovery.
                 if let Err(release_error) = self.power.release(id) {
                     return Err(format!("{error} {release_error}"));
                 }
-                let mut inner = self.inner.lock().unwrap();
+                let mut inner = self.inner.lock();
                 inner.assertion_id = None;
                 if !inner.server_owned {
                     inner.mode = None;
@@ -242,36 +275,50 @@ impl AppState {
                 return Err(error);
             }
         }
-        let mut inner = self.inner.lock().unwrap();
-        inner.start_time = Some(Instant::now());
-        inner.duration = duration_secs.map(Duration::from_secs);
+        {
+            let mut inner = self.inner.lock();
+            inner.start_time = Some(Instant::now());
+            inner.duration = duration_secs.map(Duration::from_secs);
+        }
+        let history_id = self.history.start(mode, duration_secs).ok();
+        self.inner.lock().history_session_id = history_id;
         Ok(())
     }
 
     // Caller owns operation. Restore before release so a canceled prompt
     // cannot discard the assertion or its cleanup bookkeeping.
-    fn cleanup(&self) -> Result<(), String> {
-        let (id, server_owned) = {
-            let inner = self.inner.lock().unwrap();
-            (inner.assertion_id, inner.server_owned)
+    fn cleanup(&self, reason: &str) -> Result<(), String> {
+        let (id, server_owned, history_id) = {
+            let inner = self.inner.lock();
+            (
+                inner.assertion_id,
+                inner.server_owned,
+                inner.history_session_id,
+            )
         };
         if server_owned {
             self.power.restore_server()?;
-            self.inner.lock().unwrap().server_owned = false;
+            self.inner.lock().server_owned = false;
         }
         if let Some(id) = id {
             self.power.release(id)?;
         }
-        let mut inner = self.inner.lock().unwrap();
-        inner.assertion_id = None;
-        inner.mode = None;
-        inner.start_time = None;
-        inner.duration = None;
+        {
+            let mut inner = self.inner.lock();
+            inner.assertion_id = None;
+            inner.mode = None;
+            inner.start_time = None;
+            inner.duration = None;
+            inner.history_session_id = None;
+        }
+        if let Some(history_id) = history_id {
+            let _ = self.history.end(history_id, reason);
+        }
         Ok(())
     }
 
     pub fn deactivate_if_active(&self) -> Result<(), String> {
-        self.transition(|| self.cleanup())
+        self.transition(|| self.cleanup("stopped"))
     }
 
     pub fn expire_if_due(&self) {
@@ -282,7 +329,7 @@ impl AppState {
         let _ = self.transition(|| {
             // Recheck under the operation lock: never stop a newer session.
             if self.get_status().remaining_seconds == Some(0) {
-                self.cleanup()?;
+                self.cleanup("expired")?;
             }
             Ok(())
         });
@@ -293,7 +340,7 @@ impl AppState {
 mod tests {
     use super::*;
     use std::sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering},
         Arc,
     };
 
@@ -333,12 +380,47 @@ mod tests {
             Ok(self.recovery.load(Ordering::SeqCst))
         }
     }
-    fn fixture() -> (AppState, Arc<FakePower>) {
+
+    #[derive(Default)]
+    struct FakeHistory {
+        started: AtomicI64,
+        ended: AtomicI64,
+        reason: Mutex<Option<String>>,
+    }
+
+    impl SessionHistoryControl for Arc<FakeHistory> {
+        fn start(&self, _: AssertionType, _: Option<u64>) -> Result<i64, String> {
+            self.started.store(7, Ordering::SeqCst);
+            Ok(7)
+        }
+
+        fn end(&self, id: i64, reason: &str) -> Result<(), String> {
+            self.ended.store(id, Ordering::SeqCst);
+            *self.reason.lock() = Some(reason.to_string());
+            Ok(())
+        }
+
+        fn reconcile(&self, _: bool) -> Result<Option<i64>, String> {
+            Ok(None)
+        }
+    }
+
+    fn fixture_with_history() -> (AppState, Arc<FakePower>, Arc<FakeHistory>) {
         let power = Arc::new(FakePower::default());
+        let history = Arc::new(FakeHistory::default());
         (
-            AppState::new(Box::new(power.clone()), AssertionType::NoIdleSleep),
+            AppState::new(
+                Box::new(power.clone()),
+                Box::new(history.clone()),
+                AssertionType::NoIdleSleep,
+            ),
             power,
+            history,
         )
+    }
+    fn fixture() -> (AppState, Arc<FakePower>) {
+        let (state, power, _) = fixture_with_history();
+        (state, power)
     }
     #[test]
     fn failed_restore_retains_assertion_and_supports_retry() {
@@ -370,7 +452,11 @@ mod tests {
     fn startup_recovery_blocks_new_activation() {
         let power = Arc::new(FakePower::default());
         power.recovery.store(true, Ordering::SeqCst);
-        let state = AppState::new(Box::new(power), AssertionType::NoIdleSleep);
+        let state = AppState::new(
+            Box::new(power),
+            Box::new(Arc::new(FakeHistory::default())),
+            AssertionType::NoIdleSleep,
+        );
         assert!(state.get_status().recovery_required);
         assert!(state.activate(AssertionType::NoIdleSleep, None).is_err());
         state.deactivate_if_active().unwrap();
@@ -380,7 +466,7 @@ mod tests {
     fn expiry_does_not_repeat_failed_authorization() {
         let (state, power) = fixture();
         state.activate(AssertionType::ServerMode, Some(1)).unwrap();
-        state.inner.lock().unwrap().start_time = Some(Instant::now() - Duration::from_secs(2));
+        state.inner.lock().start_time = Some(Instant::now() - Duration::from_secs(2));
         power.fail_restore.store(true, Ordering::SeqCst);
         state.expire_if_due();
         let revision = state.get_status().revision;
@@ -404,5 +490,17 @@ mod tests {
             .activate(AssertionType::NoDisplaySleep, Some(0))
             .is_err());
         assert_eq!(state.get_status().mode, Some(AssertionType::NoIdleSleep));
+    }
+
+    #[test]
+    fn successful_session_records_its_stop_reason() {
+        let (state, _, history) = fixture_with_history();
+        state
+            .activate(AssertionType::NoDisplaySleep, Some(60))
+            .unwrap();
+        assert_eq!(history.started.load(Ordering::SeqCst), 7);
+        state.deactivate_if_active().unwrap();
+        assert_eq!(history.ended.load(Ordering::SeqCst), 7);
+        assert_eq!(history.reason.lock().as_deref(), Some("stopped"));
     }
 }

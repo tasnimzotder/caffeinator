@@ -43,7 +43,7 @@ jobs:
       - name: Check frontend
         run: |
           bun run build
-          bun test tests/powerTelemetry.test.ts
+          bun test tests
 
       - name: Check Raycast extension
         working-directory: extensions/raycast

@@ -51,6 +51,35 @@ export interface PowerTelemetry {
   updated_at_ms: number;
 }
 
+export type HistoryRange = "hour" | "day" | "week";
+
+export interface PowerHistoryPoint {
+  sampled_at_ms: number;
+  system_watts: number | null;
+  battery_watts: number | null;
+  battery_percent: number | null;
+}
+
+export interface SessionHistory {
+  id: number;
+  mode: AssertionType;
+  started_at_ms: number;
+  ended_at_ms: number | null;
+  planned_duration_seconds: number | null;
+  end_reason: "stopped" | "expired" | "replaced" | "interrupted" | null;
+}
+
+export interface PowerHistory {
+  from_ms: number;
+  to_ms: number;
+  average_system_watts: number | null;
+  peak_system_watts: number | null;
+  sample_count: number;
+  session_seconds: number;
+  points: PowerHistoryPoint[];
+  sessions: SessionHistory[];
+}
+
 export const DURATION_PRESETS = [
   { label: "30m", seconds: 30 * 60 },
   { label: "1h", seconds: 60 * 60 },
