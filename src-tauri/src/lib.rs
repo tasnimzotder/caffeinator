@@ -3,8 +3,8 @@ mod control;
 #[cfg(target_os = "macos")]
 mod macos_window;
 mod power;
-mod settings;
 mod state;
+mod storage;
 mod telemetry;
 
 use commands::STATUS_EVENT;
@@ -190,6 +190,7 @@ pub fn run() {
             commands::hide_window,
             commands::get_power_profile,
             commands::get_power_telemetry,
+            commands::get_power_history,
             commands::quit_app,
             commands::get_autostart_enabled,
             commands::set_autostart_enabled,
@@ -254,6 +255,12 @@ pub fn run() {
                     }
                     let _ = app_handle.emit(STATUS_EVENT, &status);
                 }
+            });
+            std::thread::spawn(|| loop {
+                if let Ok(sample) = telemetry::read() {
+                    let _ = storage::record_power_sample(&sample);
+                }
+                std::thread::sleep(std::time::Duration::from_secs(30));
             });
             if app.state::<AppState>().get_status().recovery_required {
                 show_main(app.handle());

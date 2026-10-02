@@ -107,7 +107,7 @@ struct RecoveryRecord {
 }
 
 fn recovery_path() -> std::path::PathBuf {
-    crate::settings::config_dir().join("power-recovery.json")
+    crate::storage::config_dir().join("power-recovery.json")
 }
 
 fn read_recovery() -> Result<Option<RecoveryRecord>, String> {
@@ -191,9 +191,9 @@ pub fn enable_lid_close_prevention() -> Result<(), String> {
         version: 1,
         sleep_disabled: original,
     };
-    std::fs::create_dir_all(crate::settings::config_dir()).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(crate::storage::config_dir()).map_err(|e| e.to_string())?;
     let json = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-    crate::settings::atomic_write(&recovery_path(), &json).map_err(|e| e.to_string())?;
+    crate::storage::atomic_write(&recovery_path(), &json).map_err(|e| e.to_string())?;
     if original != 1 {
         if let Err(error) = set_sleep_disabled(1) {
             // Cancellation normally changes nothing. Clear only after verifying
