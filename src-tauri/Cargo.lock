@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "caffeinator"
-version = "0.1.4-alpha"
+version = "0.1.5-alpha"
 dependencies = [
  "core-foundation",
  "objc2 0.5.2",
