@@ -17,10 +17,10 @@ cask "caffeinator" do
 
   app "Caffeinator.app"
 
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-cr", "#{appdir}/Caffeinator.app"],
-                   sudo: false
+  postflight_steps do
+    run "/usr/bin/xattr",
+                   args: ["-cr", "{{appdir}}/Caffeinator.app"],
+                   writable_paths: ["Caffeinator.app"], writable_base: :appdir
   end
 
   zap trash: [
