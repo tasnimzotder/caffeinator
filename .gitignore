@@ -55,3 +55,10 @@ scripts/
 
 docs/
 
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Generated artifacts from the previous Tauri build
+src-tauri/gen/

@@ -1,63 +1,45 @@
-# Caffeinator internals
+# Native architecture
 
-## Native state owns the session
+Caffeinator is a Swift Package executable bundled as a macOS accessory app. It has no webview, Rust runtime, remote backend, or third-party Swift dependency.
 
-React, the native tray, and Raycast all call the same Rust state machine in `state.rs`. A transition lock serializes activation, deactivation, and preference changes. Status has a separate short-lived lock, so a macOS authorization prompt does not block status reads. Commands that could prompt or wait run off the main UI thread. AppKit window changes are dispatched onto the main thread.
-
-`CaffeinateStatus` includes activity, active and selected modes, selected duration, remaining and total seconds, busy state, recovery state, an actionable error, and a monotonically increasing revision. React subscribes before its initial status fetch and rejects stale revisions. The one-second status stream is independent of the minute-formatted tray title. Countdown values round upward, so expiration does not happen early.
-
-Timer expiry rechecks the current deadline under the transition lock. It cannot stop a newer session using an old snapshot. A failed expiry cleanup records an error and stops automatic retries, avoiding repeated authorization prompts.
-
-## Assertion lifecycle and Server Mode
-
-Normal modes use an IOKit assertion owned by the app process. An assertion is retained in state until its release succeeds.
-
-Server Mode also reads the global `SleepDisabled` value from `pmset -g` and records it in `~/.config/caffeinator/power-recovery.json`. The journal is written atomically and synced before requesting `pmset -a disablesleep 1`. Neither activation nor cleanup edits the user's normal sleep timers.
-
-Deactivation restores the recorded override first, verifies the value, removes the journal, and then releases the assertion. A canceled prompt or failed restoration retains state for an explicit retry. An interrupted session is detected from the journal on startup; the app displays restoration instead of claiming readiness. A malformed or unsupported journal fails closed without guessing a replacement setting.
-
-AppleScript error -128 identifies cancellation. General exit status 1 is not treated as cancellation.
-
-The app cannot restore a global setting during a crash or force-quit; the journal makes restoration possible on the next launch. Regular Quit requests complete cleanup first and leave the app running if cleanup fails. macOS shutdown or process termination may bypass that path.
-
-## Preferences
-
-`~/.config/caffeinator/caffeinator.sqlite3` is the native source of truth for preferences, session history, and sampled power telemetry. SQLite uses WAL mode, a five-second busy timeout, constrained values, and explicit schema migrations. On first launch after upgrading, the app imports a valid `settings.json` row transactionally and then attempts to remove the legacy file. The crash-recovery journal remains a separate synced JSON file because it must be durable before privileged system settings change.
-
-Mode and duration selections are persisted through native commands. A successful activation also updates the defaults and opens a session-history row, including sessions started from the tray or Raycast. Successful stop and expiry transitions close that row with a reason. Startup reconciliation marks orphaned normal sessions interrupted while preserving a recoverable Server Mode row until restoration finishes.
-
-## Raycast control channel
-
-`control.rs` binds `~/.config/caffeinator/control.sock` with mode 0600. The single-instance plugin prevents competing copies of the app. Existing non-socket files and symlinks at the socket path are rejected.
-
-Each connection carries one newline-delimited JSON request and one response:
-
-```json
-{"command":"start","mode":"NoIdleSleep","duration_secs":1800}
+```text
+Caffeinator.app
+├── AppKit status item and transient popover
+├── SwiftUI screens and main-thread view models
+└── CaffeinatorCore
+    ├── SessionEngine: serialized transitions and independent status reads
+    ├── MacPower: IOKit assertions and recoverable pmset override
+    ├── Storage: existing SQLite schema and legacy settings import
+    ├── TelemetryReader: read-only AppleSmartBattery data
+    └── ControlServer: bounded user-only Unix socket for Raycast
 ```
 
-Supported commands are `status`, `start`, `stop`, `toggle`, `show`, and `preferences`. Start and preferences accept a mode and a duration in seconds (null means indefinite). Responses have `ok`, `status`, and `error`.
+## Threading and session lifecycle
 
-Requests are bounded to 8192 bytes, reads/writes have timeouts, and concurrent connections are bounded. No arbitrary shell command, filesystem path, TCP listener, or administrator credential is exposed by the protocol.
+AppKit and SwiftUI run on the main thread. Session operations and sensor subprocesses run on background queues. `SessionEngine` uses an operation lock for complete transitions and a short-held state lock for snapshots. Status remains readable while an authorization prompt is open. Overlapping commands fail rather than queue duplicate toggles.
 
-The Raycast client probes with a read-only status request. If the socket is missing or refuses connection, it can launch the configured app with `open -g -a` and wait for availability. Once a mutating request is sent, it is never replayed automatically after an uncertain response. The extension's status view refreshes every five seconds.
+Durations are validated before replacing a session. Countdown uses monotonic uptime and rounds remaining fractional seconds upward. A one-second ticker schedules expiration. Expiry rechecks the current session under the operation lock, never repeats a failed authorization automatically, and leaves explicit retry available.
 
-## Live power telemetry
+Cleanup restores the global override before releasing the IOKit assertion. Failed restoration retains ownership; failed assertion release retains the ID. Normal quit waits for successful cleanup. Crashes release per-process IOKit assertions through macOS, while Server Mode's journal remains for next-launch restoration.
 
-The Power view polls `get_power_telemetry` every two seconds while visible, without overlapping requests. `telemetry.rs` reads the AppleSmartBattery IORegistry service as a plist. PowerTelemetryData's SystemLoad, BatteryPower, and SystemPowerIn values are converted from milliwatts to watts. The adapter's rated Watts value is displayed separately from measured input. Voltage/current are converted from millivolts/milliamps; signed and unsigned two's-complement discharge current are both supported.
+## Server Mode
 
-Battery percentage, charging/full/plugged-in state, and time remaining come from macOS battery fields. Missing sensors are unavailable, never invented as zero. The system-draw graph retains up to 60 seconds of readings. Failed reads are marked stale and retried. This uses read-only sensors and does not require administrator authorization.
+`power-recovery.json` retains version 1 and `sleep_disabled` (0 or 1). Its temporary file is flushed and renamed, and the parent directory is synced before running the fixed, validated `pmset -a disablesleep` command through administrator authorization. No user text enters the script. The applied value is read back. The journal is cleared only after the original value is verified. Invalid journals fail closed and are preserved.
 
-## Recorded power history
+## Storage
 
-While the app runs, a native worker samples the same read-only sensors every 30 seconds. Samples are stored in fixed 30-second buckets, so opening the Power view does not increase database growth. Raw samples are retained for seven days. The history command aggregates them into roughly screen-sized buckets for the last hour, day, or week and returns average draw, peak draw, sample count, overlapping session time, and recent sessions.
+`caffeinator.sqlite3` retains schema version 2, table/column names, WAL mode, and a five-second busy timeout. Version 0 creates the existing settings and history schema; version 1 adds history without replacing preferences. Newer schemas are rejected. Legacy `LidClose` maps to `ServerMode`. Legacy JSON is kept after successful import for rollback reference.
 
-The Power view keeps the two-second live instrument separate from this durable timeline. Range changes and 30-second refreshes query the Rust-owned database through Tauri; neither React nor Raycast opens SQLite directly. The browser preview supplies deterministic simulated history through the same response contract.
+Power samples are bucketed at 30 seconds and trimmed after seven days. Hour/day/week views aggregate with the original bucket intervals, and session duration is clipped to the requested range. SQL parameters are bound. Database access is serialized independently of session status.
 
-## Interface and verification
+## Control service and startup
 
-The webview is a 400 × 480 popover with a scrollable content region, fixed navigation, and fixed footer. It hides on focus loss. Reduced-motion settings suppress animations, controls have keyboard focus indicators, and active actions disable while native transitions are pending.
+The Swift process takes an exclusive file lock before initializing/reconciling the database. It also checks the existing control socket for the previous Tauri implementation. Only stale sockets may be removed; non-socket paths are preserved. The socket mode is 0600. At most eight clients run concurrently, requests must be newline-terminated JSON of at most 8192 bytes, unknown commands/fields are rejected, and nullable status fields remain explicitly encoded for Raycast compatibility.
 
-The browser preview is available only in Vite development when there is no Tauri bridge. It explicitly labels sessions as simulated; release bundles require the native bridge.
+Launch-at-login uses `SMAppService.mainApp`. A legacy Caffeinator LaunchAgent is removed only after successful replacement or an explicit disable. Single-instance reopen uses a distributed local notification; Raycast `show` opens the popover even before the first tray click.
 
-Rust tests exercise recovery, retained assertions, expiry, invalid durations, SQLite schema upgrades, settings import, telemetry aggregation, session lifecycle history, power-output parsing, and control-request validation. Frontend tests cover native/camel-case IPC normalization. Raycast transport tests cover fragmented replies, malformed/oversized responses, connection errors, and non-replay after an uncertain toggle. The native smoke-test script checks a real short IOKit session without requesting privileged Server Mode.
+## Packaging
+
+`tools/build-app.sh` builds via SwiftPM, writes the application Info.plist, copies the icon, and ad-hoc signs and verifies the app. `tools/build-dmg.sh` adds an Applications link, creates the DMG, checks integrity, and prints SHA256. `VERSION` and the root package manifest must agree. CI validates Swift tests, the native build/protocol, and Raycast. Tagged releases publish the DMG and update the Homebrew cask. Publishing a Swift release requires macOS 13 in the generated cask.
+
+The release is not notarized without a Developer ID certificate and Apple developer credentials.

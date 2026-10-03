@@ -1,54 +1,22 @@
-# Caffeinator Makefile
-# Build commands for Tauri app
-
-.PHONY: dev build dmg clean install help
-
-VERSION := $(shell awk -F'"' '/"version"/{print $$4; exit}' src-tauri/tauri.conf.json)
-
-# Default target
+.PHONY: all dev build dmg test clean install help
 all: build
-
-# Run development server
-dev:
-	@echo "Starting Caffeinator dev server..."
-	bun run tauri dev
-
-# Build release version (.app bundle only)
 build:
-	@echo "Building Caffeinator $(VERSION) (Release)..."
-	bun run tauri build --bundles app
-
-# Build DMG (creates .app first, then DMG manually)
-dmg: build
-	@echo "Creating DMG..."
-	cd src-tauri/target/release/bundle && \
-	rm -f Caffeinator_*.dmg && \
-	hdiutil create -volname "Caffeinator" -srcfolder macos/Caffeinator.app -ov -format UDZO Caffeinator_$(VERSION)_aarch64.dmg
-	@echo "DMG created at src-tauri/target/release/bundle/Caffeinator_$(VERSION)_aarch64.dmg"
-
-# Clean build artifacts
-clean:
-	@echo "Cleaning..."
-	rm -rf dist target src-tauri/target
-
-# Install to /Applications (requires the app to be built first)
+	./tools/build-app.sh
+dmg:
+	./tools/build-dmg.sh
+test:
+	swift test -Xswiftc -warnings-as-errors
+dev: build
+	open -n dist/Caffeinator.app --args --show
 install: build
-	@echo "Installing to /Applications..."
-	@if [ -d "src-tauri/target/release/bundle/macos/Caffeinator.app" ]; then \
-		cp -r src-tauri/target/release/bundle/macos/Caffeinator.app /Applications/; \
-		echo "Installed to /Applications/Caffeinator.app"; \
-	else \
-		echo "Error: App bundle not found. Build first with 'make build'"; \
-		exit 1; \
-	fi
-
-# Show help
+	@echo "Quit the existing Caffeinator app before installing."
+	@test -z "$$(pgrep -x caffeinator)" || (echo "Caffeinator is running; stop its session and quit first."; exit 1)
+	ditto dist/Caffeinator.app /Applications/Caffeinator.app
+clean:
+	swift package clean
 help:
-	@echo "Caffeinator Build Commands"
-	@echo ""
-	@echo "  make dev      - Run development server with hot reload"
-	@echo "  make build    - Build release .app bundle"
-	@echo "  make dmg      - Build release and create DMG"
-	@echo "  make clean    - Clean build artifacts"
-	@echo "  make install  - Build and install to /Applications"
-	@echo "  make help     - Show this help"
+	@echo "make build   Build an ad-hoc-signed native app in dist/"
+	@echo "make dmg     Build and verify a distributable DMG"
+	@echo "make test    Run Swift core tests"
+	@echo "make dev     Build and open the native app"
+	@echo "make install Copy the app to /Applications after quitting the existing app"

@@ -4,11 +4,11 @@ cask "caffeinator" do
 
   url "https://github.com/tasnimzotder/caffeinator/releases/download/{{VERSION}}/Caffeinator_{{VERSION}}_aarch64.dmg"
   name "Caffeinator"
-  desc "Minimal macOS menu bar app to keep your Mac awake"
+  desc "Menu bar app to keep your Mac awake"
   homepage "https://github.com/tasnimzotder/caffeinator"
 
   depends_on arch: :arm64
-  depends_on macos: :big_sur
+  depends_on macos: ">= :ventura"
 
   livecheck do
     url :url
