@@ -1,102 +1,95 @@
-<p align="center">
-  <img src="src-tauri/icons/icon-readme.svg" alt="Caffeinator" width="96" height="96">
-</p>
-
+<p align="center"><img src="assets/icon-readme.svg" alt="Caffeinator" width="96" height="96"></p>
 <h1 align="center">Caffeinator</h1>
 <p align="center">A little extra uptime for your Mac.</p>
 
-A macOS menu-bar utility with a warm, dark popover. Choose a mode and duration, then start a session. Close the window and Caffeinator keeps working.
+A native macOS menu-bar utility written in Swift, with SwiftUI screens and an AppKit popover. Choose a mode and duration, then start a session. Close the popover and Caffeinator keeps working.
 
 ## Features
 
-- A 400 × 480 popover with Session, Power, and Settings views.
-- A live countdown and menu-bar timer, independent of the window.
-- Remembered mode and duration across the app, menu bar, and Raycast.
+- A compact 400 × 500 popover with Session, Power, History, and Settings screens.
+- Live session countdown and menu-bar timer, independent of the popover.
+- Remembered mode and duration shared with the Raycast extension.
 - Presets, custom durations up to seven days, and indefinite sessions.
-- Launch at login, keyboard shortcuts, and click-outside dismissal.
-- Live system watts, battery charging/discharging power, adapter input, battery percentage, voltage/current, and charging estimates, plus a durable seven-day power timeline and awake-session history (where supported by macOS).
-- Native sleep preferences and active power assertions.
-- Recoverable Server Mode with explicit error handling and saved original settings.
+- Launch at login, keyboard shortcuts, right-click actions, and click-outside dismissal.
+- Live measured system watts, adapter input, signed battery power, battery level, voltage/current, and charging estimates, where the hardware exposes them.
+- Native Swift Charts for the seven-day power timeline, plus awake-session history.
+- Current sleep preferences and active power assertions.
+- Recoverable Server Mode with a durable journal of the original sleep override.
 
 ## Modes
 
-| Mode | What it does |
+| Mode | Behavior |
 | --- | --- |
-| Keep awake | Prevents idle system sleep; the display follows macOS settings. |
-| Keep display on | Prevents idle display and system sleep. |
-| Server Mode | Prevents idle sleep and uses a privileged global sleep override to survive lid closure. |
-| Network | Uses the macOS NetworkClientActive assertion for network work. |
-| Background | Uses the macOS BackgroundTask assertion; macOS controls low-power behavior. |
+| Keep awake | Prevent idle system sleep; the display follows macOS settings. |
+| Keep display on | Prevent idle display sleep using a macOS power assertion. |
+| Server Mode | Prevent idle sleep and use an authorized global override to survive lid closure. |
+| Network | Use the macOS NetworkClientActive assertion for network work. |
+| Background | Use the macOS BackgroundTask assertion; macOS controls low-power behavior. |
 
-Server Mode requires administrator authorization to change the global sleep override. The original value is recorded before changing it and restored when you stop. Normal sleep timers are never rewritten. If authorization or cleanup fails, the session remains visible and retryable. If the app crashes, it offers restoration on the next launch; it cannot restore a global setting while it is not running.
+Server Mode requires administrator authorization. The original global sleep override is synced to disk before changing it and restored when you stop. Normal sleep timers are never rewritten. Failed authorization or cleanup remains visible and retryable. After a crash, the app offers restoration on its next launch; it cannot restore a global setting while it is not running. A depleted battery still shuts the Mac down.
 
-A Mac still needs available power. Server Mode cannot keep a depleted battery running, and network/background assertions are subject to macOS policy.
+## Requirements and installation
 
-## Installation
+The Swift version requires **macOS 13 or later**. The published 0.1.x releases use the previous Tauri implementation; this branch prepares the native 0.2.0 release.
 
 ```bash
 brew install --cask tasnimzotder/tap/caffeinator
 ```
 
-For a manual installation, download the DMG from [Releases](https://github.com/tasnimzotder/caffeinator/releases), then drag Caffeinator to Applications.
+Or download a DMG from [Releases](https://github.com/tasnimzotder/caffeinator/releases) and drag Caffeinator to Applications.
+
+Builds are ad-hoc signed. They are not Developer ID signed or notarized; downloaded builds may require explicit approval in macOS Privacy & Security.
 
 ## Build from source
 
-Requires macOS, Bun, Rust, and Xcode Command Line Tools.
+Install Xcode or its Command Line Tools with Swift 5.9 or newer. Open `Package.swift` in Xcode, or use:
 
 ```bash
-bun install
-make build      # Build the app bundle
-make install    # Build and copy to /Applications
+make test       # Swift core tests, with warnings treated as errors
+make build      # Ad-hoc-signed dist/Caffeinator.app
+make dev        # Build and open the native app
+make dmg        # Build and verify a DMG in dist/
+make install    # Copy to /Applications after quitting the existing app
 ```
 
-`bun run dev` opens a development-only browser preview with clearly labeled simulated sessions. `make dev` runs the native Tauri app against the frontend dev server.
+Bun and Rust are not required to build the app. Bun is only used for the optional Raycast extension. `CAFFEINATOR_ARCH=x86_64 make build` builds an Intel app locally; the release workflow currently publishes Apple Silicon DMGs.
+
+## Data compatibility
+
+Settings, sessions, and power samples retain the existing SQLite schema at `~/.config/caffeinator/caffeinator.sqlite3`. Settings-only version 1 databases upgrade to version 2. Legacy `settings.json` is imported when no database preference row exists and kept as a rollback reference. Power samples are retained for seven days. The existing `power-recovery.json` journal is compatible with the Swift implementation.
+
+Quit the previous Caffeinator process before launching the Swift build against your real data. A running control socket is never replaced. Tests and development previews can use `CAFFEINATOR_CONFIG_DIR=/path/to/disposable/folder` to isolate storage.
 
 ## Raycast
 
-The local extension lives in [extensions/raycast](extensions/raycast). It provides:
-
-- **Start Session** — choose a mode and preset/custom duration.
-- **Toggle Keep Awake** — start your saved defaults or end the current session.
-- **Stop Session** — stop and restore sleep settings.
-- **Session Status** — inspect the active mode, remaining time, and recovery state.
-- **Open Caffeinator** — show the popover.
-
-After installing the updated app:
+The extension in [extensions/raycast](extensions/raycast) provides **Start Session**, **Toggle Keep Awake**, **Stop Session**, **Session Status**, and **Open Caffeinator**. Its protocol and default `/Applications/Caffeinator.app` path are unchanged.
 
 ```bash
 cd extensions/raycast
-bun install
+bun install --frozen-lockfile
+bun run typecheck
+bun test tests
 bun run build
 bun run dev
 ```
 
-Alternatively, run Raycast’s **Import Extension** command and choose that directory. Automatic background launch is enabled by default. The application path is configurable in extension preferences. This extension is local and has not been published to the Raycast Store.
+Or use Raycast’s **Import Extension** command. The extension is local and has not been published to the Raycast Store. Its user-only Unix socket listens at `~/.config/caffeinator/control.sock`; it opens no TCP port and handles no administrator credentials.
 
-Raycast communicates with the same native state machine over a user-only Unix socket. It does not use a network port or handle administrator credentials.
+## Shortcuts and verification
 
-## Shortcuts
-
-- **⌘ Return**: start or stop from the Session view.
-- **Escape**: hide the window.
-- Click the menu-bar icon to reopen; right-click for quick actions.
-
-## Verification
+- **⌘ Return** starts or stops from Session.
+- **Escape** dismisses the popover.
+- Left-click the tray icon to open; right-click for quick actions.
 
 ```bash
-bun run build
-cd src-tauri
-cargo test
-cargo clippy --all-targets -- -D warnings
-cd ../extensions/raycast
-bun test
-bun run build
-bun run typecheck
+make test
+make build
+python3 tools/verify-native.py dist/Caffeinator.app/Contents/MacOS/caffeinator
 ```
 
-For an explicit native smoke test, launch the updated app, ensure no session is active, and run `bun scripts/verify-native.ts` from the root. It creates a three-second idle assertion, verifies expiry and unchanged power preferences, and restores the saved app defaults.
+The integration check uses temporary data, exercises four real IOKit assertion modes, start/stop/toggle/show, timed expiry, protocol validation, single-instance behavior, and preference/history persistence. It verifies configured power settings are unchanged. It does not invoke privileged Server Mode; its failure and recovery paths are tested with injected power controls.
 
-See [docs/INTERNALS.md](docs/INTERNALS.md) for lifecycle and recovery details.
+See [docs/INTERNALS.md](docs/INTERNALS.md) for lifecycle details.
 
 ## License
 
